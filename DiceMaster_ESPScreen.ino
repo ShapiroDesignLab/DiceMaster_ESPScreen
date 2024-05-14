@@ -14,15 +14,15 @@
 // #include "imageh/rgb565_text_7.h"
 // #include "imageh/rgb565_text_8.h"
 
-#define USING_SPI false
+#define USING_SPI true
 
 // Testing flag, DELETE AFTERWARDS
 bool colored = true;
 
 
 uint16_t img_index = 0;
-const uint16_t MAX_IMG_INDEX = 3;
-const uint16_t * imgs[MAX_IMG_INDEX] = {umlogo,queen, sergeant};
+const uint16_t MAX_IMG_INDEX = 1;
+const uint16_t * imgs[MAX_IMG_INDEX] = {umlogo};
             // {umlogo,author,barman};
             // {movie_star,psychic,queen};
             // {sergeant,text_1,text_2};
@@ -31,8 +31,8 @@ const uint16_t * imgs[MAX_IMG_INDEX] = {umlogo,queen, sergeant};
 
 #include <U8g2lib.h>
 #include <Arduino_GFX_Library.h>
-// #include <Adafruit_FT6206.h>
-// #include <Adafruit_CST8XX.h>
+#include <Adafruit_FT6206.h>
+#include <Adafruit_CST8XX.h>
 
 #define MODE_IMG 0;
 #define MODE_ANIM 1;
@@ -65,11 +65,18 @@ uint16_t * screen_buffer;
 
 #include <ESP32DMASPISlave.h>
 ESP32DMASPI::Slave slave;
-static constexpr size_t BUFFER_SIZE = 256;
+static constexpr size_t SPI_MOSI_BUFFER_SIZE = 4092;  // 4088 Bytes content (4k), last 4 bytes are ignored due to driver bug
+/* --
+ - Protocol: 1 byte for device address, 2nd byte for message type, 3rd-4th bytes for message lengths, 5th- 4092-th bytes content
+    - DUE TO DRIVER BUG, SENDER SHOULD SEND 4 BYTES MORE, SO 4096 BYTES
+    - message types: 1 for ping; 3 for draw text, 7 for sending image; 65535 for stopping transaction
+-- */
+
+static constexpr size_t SPI_MISO_BUFFER_SIZE = 64;
 static constexpr size_t QUEUE_SIZE = 1;
 uint8_t* dma_tx_buf;
 uint8_t* dma_rx_buf;
-
+size_t last_update_time;
 
 void setup(void)
 {
@@ -105,80 +112,102 @@ void setup(void)
   fill_from_source(screen_buffer, umlogo);
   draw_img(screen_buffer);
 
+  Serial.println("Screen Initialized!");
 
 #if USING_SPI
-  dma_tx_buf = slave.allocDMABuffer(BUFFER_SIZE);
-  dma_rx_buf = slave.allocDMABuffer(BUFFER_SIZE);
+  dma_tx_buf = slave.allocDMABuffer(SPI_MISO_BUFFER_SIZE);
+  dma_rx_buf = slave.allocDMABuffer(SPI_MOSI_BUFFER_SIZE);
 
-  slave.setDataMode(SPI_MODE0);           // default: SPI_MODE0
-  slave.setMaxTransferSize(BUFFER_SIZE);  // default: 4092 bytes
-  slave.setQueueSize(QUEUE_SIZE);         // default: 1
+  slave.setDataMode(SPI_MODE0);
+  slave.setMaxTransferSize(SPI_MOSI_BUFFER_SIZE);
+  slave.setQueueSize(QUEUE_SIZE);
 
   // begin() after setting
   slave.begin();  // default: HSPI (please refer README for pin assignments)
+
+  Serial.println("SPI Initialized!");
 #endif
+
+
+  last_update_time = millis();
 }
 
 
 void loop()
 {
-  unsigned long startTime = millis();
+  // if no transaction is in flight and all results are handled, queue new transactions
+  if (slave.hasTransactionsCompletedAndAllResultsHandled()) {
+      // do some initialization for tx_buf and rx_buf
+
+      // queue multiple transactions
+      // slave first receive some stuff
+      slave.queue(NULL, dma_rx_buf, SPI_MOSI_BUFFER_SIZE);
+      // then sends some stuff
+      slave.queue(dma_tx_buf, NULL, SPI_MISO_BUFFER_SIZE);
   
-  if (colored) {
+      // finally, we should trigger transaction in the background
+      slave.trigger();
+  }
+
+  
+  if (colored==true && (millis()-last_update_time>1000)) {
+    Serial.println("Updating Images");
     fill_from_source(screen_buffer,imgs[img_index]);
     draw_img(screen_buffer);
     colored = false;
     img_index = (img_index + 1) % MAX_IMG_INDEX;
+    last_update_time = millis();
   }
-  else{
+  else if (colored==false && (millis()-last_update_time>1000)){
+    Serial.println("Updating Texts");
     gfx->fillScreen(65535);
     // gfx->drawRect(10, 10, 300, 300, RED);
 
-    // gfx->setTextColor(RED);
-    // gfx->setTextSize(2);
+    gfx->setTextColor(RED);
+    gfx->setTextSize(2);
 
-    // // Spanish
-    // gfx->setFont(u8g2_font_unifont_tf); 
-    // gfx->setCursor(40, 40);
-    // gfx->println("Psíquico");
+    // Spanish
+    gfx->setFont(u8g2_font_unifont_tf); 
+    gfx->setCursor(40, 40);
+    gfx->println("Psíquico");
 
-    // // Germen
-    // gfx->setFont(u8g2_font_unifont_tf); 
-    // gfx->setCursor(280, 40);
-    // gfx->println("Hellseher");
+    // Germen
+    gfx->setFont(u8g2_font_unifont_tf); 
+    gfx->setCursor(280, 40);
+    gfx->println("Hellseher");
 
-    // // Russian
-    // gfx->setFont(u8g2_font_cu12_t_cyrillic); 
-    // gfx->setCursor(40, 160);
-    // gfx->println("экстрасенс");
+    // Russian
+    gfx->setFont(u8g2_font_cu12_t_cyrillic); 
+    gfx->setCursor(40, 160);
+    gfx->println("экстрасенс");
 
-    // // French
-    // gfx->setFont(u8g2_font_unifont_tf); 
-    // gfx->setCursor(280, 160);
-    // gfx->println("Psychique");
+    // French
+    gfx->setFont(u8g2_font_unifont_tf); 
+    gfx->setCursor(280, 160);
+    gfx->println("Psychique");
 
-    // // English
-    // gfx->setFont(u8g2_font_unifont_tf); 
-    // gfx->setCursor(40, 280);
-    // gfx->println("Psychic");
+    // English
+    gfx->setFont(u8g2_font_unifont_tf); 
+    gfx->setCursor(40, 280);
+    gfx->println("Psychic");
 
-    // // Hindi
-    // gfx->setFont(u8g2_font_unifont_t_devanagari);
-    // gfx->setCursor(280, 280);
-    // gfx->println("मानसिक");
+    // Hindi
+    gfx->setFont(u8g2_font_unifont_t_devanagari);
+    gfx->setCursor(280, 280);
+    gfx->println("मानसिक");
 
-    // // Chinese
-    // gfx->setFont(u8g2_font_unifont_t_chinese);
-    // gfx->setCursor(40, 400);
-    // gfx->println("靈媒");
+    // Chinese
+    gfx->setFont(u8g2_font_unifont_t_chinese);
+    gfx->setCursor(40, 400);
+    gfx->println("靈媒");
     
-    // // Arabic
-    // gfx->setFont(u8g2_font_unifont_t_arabic);
-    // gfx->setCursor(280, 400);
-    // gfx->println("نفسية");
-    
+    // Arabic
+    gfx->setFont(u8g2_font_unifont_t_arabic);
+    gfx->setCursor(280, 400);
+    gfx->println("نفسية");
 
     colored = true;
+    last_update_time = millis();
   }
 
   // use the buttons to turn off
@@ -190,7 +219,15 @@ void loop()
     expander->digitalWrite(PCA_TFT_BACKLIGHT, HIGH);
   }
 
-  delay(2000);
+
+  // if all transactions are completed and all results are ready, handle results
+  if (slave.hasTransactionsCompletedAndAllResultsReady(QUEUE_SIZE)) {
+    // get received bytes for all transactions
+    const std::vector<size_t> received_bytes = slave.numBytesReceivedAll();
+    // do something with received_bytes and rx_buf if needed
+    Serial.println(received_bytes.size());
+  }
+  delay(1);
 }
 
 
