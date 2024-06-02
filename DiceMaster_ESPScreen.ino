@@ -19,21 +19,27 @@ void setup(void)
 
   spid = new SPIDriver();
   screen = new Screen();
+
+  // screen->draw_text_demo();
+  // screen->update();
 }
 
-void loop(){
-\
+void loop()
+{
+  // Queue Message Receipt
+  spid->queue_cmd_msgs();
+  
   // Draw image
-  screen->draw_startup_logo();
-  screen->update();
-  delay(1000);
+  // screen->draw_startup_logo();
+  // screen->update();
 
   // Draw Text
-  screen->draw_text_demo();
+  // screen->draw_text_demo();
   screen->update();
-  delay(1000); 
+  // delay(1000); 
 
-  // spid->queue_cmd_msgs();
-  // spid->process_msgs();
-  // delay(1000);
+  // Messages
+  screen->enqueue_vec(spid->process_msgs());
+  Serial.println("Message Received and Processed");
+  delay(1);
 }

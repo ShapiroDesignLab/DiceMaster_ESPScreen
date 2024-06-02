@@ -64,18 +64,16 @@ public:
 
   virtual uint8_t get_status() {
     bool expired = (start_time > 0 && (millis()-start_time) >= duration);
-    Serial.println("S--------");
-    Serial.println(start_time);
-    Serial.println(millis()-start_time);
-    Serial.println(duration);
-    Serial.println(expired);
-    Serial.println("E--------");
+    // Serial.println("S--------");
+    // Serial.println(start_time);
+    // Serial.println(millis()-start_time);
+    // Serial.println(duration);
+    // Serial.println(expired);
+    // Serial.println("E--------");
     if (expired) {
       set_status(STATUS_EXPIRED);
     }
     status_mtx.lock();
-    Serial.println("Status: ");
-    Serial.println(status);
     uint8_t tmp_status = status;
     status_mtx.unlock();
     return tmp_status;

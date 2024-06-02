@@ -31,23 +31,18 @@ private:
   Arduino_ESP32RGBPanel* rgbpanel;
   Arduino_RGB_Display* gfx;
 
-
   std::deque<MediaContainer*> display_queue;
   uint16_t * screen_buffer;
   MediaContainer* current_disp;
 
   bool is_next_ready() {
     if (display_queue.empty()) {return false;}
-    Serial.println("Something exists");
     while (!display_queue.empty() && display_queue.front()->get_status() > STATUS_READY) {
-      Serial.println("Found expired content");
       MediaContainer* m = display_queue.front();
       display_queue.pop_front();
       delete m;
     }
-    Serial.println("Cleaned up expired content");
     if (display_queue.empty()) {return false;}
-    Serial.println("Something still exists");
     return (display_queue.front()->get_status() == STATUS_READY);
   }
   
@@ -63,7 +58,8 @@ private:
 
     // If adding image or text
     if (med->get_media_type() == MEDIA_IMAGE 
-      || med->get_media_type() == MEDIA_TEXTGROUP) {
+      || med->get_media_type() == MEDIA_TEXTGROUP
+      || med->get_media_type() == MEDIA_TEXT) {
       display_queue.push_back(med);
       return;
     }
@@ -110,7 +106,6 @@ private:
   }
 
   void draw_bitmap(uint16_t* img) {
-    Serial.println("Trying to draw bitmap");
     gfx->draw16bitRGBBitmap(0, 0, img, gfx->width(), gfx->height());
   }
 
@@ -140,21 +135,15 @@ private:
 
   void display_next() {
     assert(!display_queue.empty());
-    Serial.println("Displaying Next");
-
     if (display_queue.empty()) {
-      Serial.println("Nothing to display!");
       return;
     }
     if (current_disp != nullptr) {
-      Serial.println("Previous print found! Deleting");
       delete current_disp;
     }
 
     current_disp = display_queue.front();
     display_queue.pop_front();
-
-    Serial.println("Gotten New Content");
 
     switch (current_disp->get_media_type()) {
       case MEDIA_IMAGE: 
@@ -216,7 +205,11 @@ public:
   }
 
   void enqueue_vec(std::vector<MediaContainer*> med) {
-    for (auto m : med) enqueue(m);
+    Serial.println(med.size());
+    for (size_t i = 0;i < med.size(); ++i) {
+      enqueue(med[i]);
+    }
+    Serial.println(display_queue.size());
   }
 
   void update() {
@@ -249,7 +242,6 @@ public:
   bool up_button_pressed() {
     return !expander->digitalRead(PCA_BUTTON_UP);
   }
-
 
   // Demo Functions
   void draw_text_demo() {

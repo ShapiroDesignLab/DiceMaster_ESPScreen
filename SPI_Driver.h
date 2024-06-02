@@ -29,8 +29,8 @@ static const uint8_t IMG_HEADER_LEN = 4;            // CMD, nChunks, resolution,
 
 // For Text
 static const uint8_t MIN_TXT_LEN = 2;
-static const uint8_t TEXTGROUP_HEADER_LEN = 3;      // CMD, enforced time, color
-static const uint8_t TEXT_CHUNK_HEADER_LEN = 5;     // x_hi, x_lo, y_hi, y_lo, font, size
+static const uint8_t TEXTGROUP_HEADER_LEN = 5;      // CMD, enforced time, color
+static const uint8_t TEXT_CHUNK_HEADER_LEN = 6;     // x_hi, x_lo, y_hi, y_lo, font, size
 
 // For Options
 static const uint8_t OPTION_HEADER_LEN = 2;         // CMD, selecting
@@ -86,19 +86,33 @@ private:
     // Otherwise, this is a message header, parse it
     switch (buf[0]) {
       case CMD_PING: 
+        Serial.println("Received Ping");
+        return nullptr;
         last_ping_time = millis();
         return nullptr;
       case CMD_NEW_IMG:
+        Serial.println("Received image Header");
+        return nullptr;
         return make_img(buf, buf_size);
       case CMD_TEXT:
+        Serial.println("Received Text");
+        return nullptr;
         return make_txt_group(buf, buf_size);
       case CMD_OPTIONS:
+        Serial.println("Received Options");
+        return nullptr;
         return make_options(buf, buf_size);
       case CMD_OPTIONS_END:
+        Serial.println("Received Option End");
+        return nullptr;
         return new MediaContainer(MEDIA_OPTION_END, 0);
       case CMD_BACKLIGHT_ON:
+        Serial.println("Received BL On");
+        return nullptr;
         return new MediaContainer(MEDIA_BACKLIGHT_ON, 0);
       case CMD_BACKLIGHT_OFF:
+        Serial.println("Received BL Off");
+        return nullptr;
         return new MediaContainer(MEDIA_BACKLIGHT_OFF, 0);
     }
   }
@@ -127,15 +141,15 @@ private:
   MediaContainer* make_txt_group(uint8_t* buf, size_t buf_size) {
     assert(!expecting_bufs);
     uint8_t up_time = buf[1];
-    MediaContainer* txt_group = new TextGroup(up_time, buf[2]);
+    MediaContainer* txt_group = new TextGroup(up_time, RGB565(buf[2], buf[3], buf[4]));
 
     // Parse each text group
-    uint8_t* payload = buf + TEXTGROUP_HEADER_LEN;   // First 2 bytes are header info
+    uint8_t* payload = buf + TEXTGROUP_HEADER_LEN;   // First 4 bytes are header info
     buf_size -= TEXTGROUP_HEADER_LEN;
 
     while (buf_size >= TEXT_CHUNK_HEADER_LEN + MIN_TXT_LEN) {        // At least 6 headers, 1 byte actual word, 1 byte stop word
       if (payload[5] > 1) {       // At least 1 byte actual word, 1 byte stop word
-        MediaContainer* txt = new Text((char*)payload+6, up_time, map_font(payload[4])
+        MediaContainer* txt = new Text((char*)payload+TEXT_CHUNK_HEADER_LEN, up_time, map_font(payload[4])
                                     , (uint16_t) payload[0]*255 + payload[1]
                                     , (uint16_t) payload[2]*255 + payload[3]);
         assert(payload[TEXT_CHUNK_HEADER_LEN + payload[5]] == '\0');      // Last byte of char must be zero      
@@ -192,7 +206,7 @@ public:
     // if no transaction is in flight and all results are handled, queue new transactions
     if (slave.hasTransactionsCompletedAndAllResultsHandled()) {
       // do some initialization for tx_buf and rx_buf
-      slave.queue(dma_tx_buf, dma_rx_buf, SPI_MOSI_BUFFER_SIZE);
+      slave.queue(NULL, dma_rx_buf, SPI_MOSI_BUFFER_SIZE);
       slave.trigger();      // finally, we should trigger transaction in the background
     }
   }
@@ -204,6 +218,24 @@ public:
       const std::vector<size_t> received_bytes = slave.numBytesReceivedAll();
       size_t len_counter = 0;
 
+      String msg1 = "Received messages ";
+      msg1 += received_bytes.size();
+      String msg2 = "First one length ";
+      msg2 += received_bytes[0];
+      // Serial.println(msg);
+      TextGroup* group = new TextGroup(0, RED);
+
+      String content = " ";
+      for (size_t i = 0;i < received_bytes[0];i++) {
+        content += dma_rx_buf[i];
+        content += " ";
+      }
+      group->add_member(new Text(msg1, 0, u8g2_font_unifont_tf, 40, 40));
+      group->add_member(new Text(msg2, 0, u8g2_font_unifont_tf, 40, 120));
+      group->add_member(new Text(content, 0, u8g2_font_unifont_tf, 40, 180));
+      vec.push_back(group);
+
+      delay(100);
       // For each received message, deal with it and return a vector of containers
       for (auto buf_len : received_bytes) {
         MediaContainer* res = parse(dma_rx_buf + len_counter, buf_len);
@@ -211,6 +243,7 @@ public:
         len_counter += buf_len;
       }
     }
+    Serial.println(vec.size());
     return vec;
   }
 };
