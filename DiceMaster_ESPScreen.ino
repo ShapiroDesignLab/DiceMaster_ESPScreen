@@ -26,20 +26,27 @@ void setup(void)
 
 void loop()
 {
-  // Queue Message Receipt
-  spid->queue_cmd_msgs();
+  
   
   // Draw image
   // screen->draw_startup_logo();
   // screen->update();
-
-  // Draw Text
-  // screen->draw_text_demo();
-  screen->update();
   // delay(1000); 
+
+  // // Draw Text
+  // screen->draw_text_demo();
+  // screen->update();
+  // delay(1000); 
+
+
+
+  // Queue Message Receipt
+  spid->queue_cmd_msgs();
+
+  screen->update();
 
   // Messages
   screen->enqueue_vec(spid->process_msgs());
   Serial.println("Message Received and Processed");
-  delay(1);
+  delay(1000);
 }

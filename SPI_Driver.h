@@ -4,7 +4,8 @@
 #include <vector>
 #include <string>
 
-#include <ESP32DMASPISlave.h>
+// #include <ESP32DMASPISlave.h>
+#include <ESP32SPISlave.h>
 
 #include "Media.h"
 
@@ -12,8 +13,8 @@ extern bool __DEBUG;
 extern bool ESP_WORKING;
 
 
-static const size_t SPI_MOSI_BUFFER_SIZE = 4096;  // 2k buffer
-static const size_t SPI_MISO_BUFFER_SIZE = 4096;    // probably not using for now
+static const size_t SPI_MOSI_BUFFER_SIZE = 32;  // 2k buffer
+static const size_t SPI_MISO_BUFFER_SIZE = 32;    // probably not using for now
 static const size_t QUEUE_SIZE = 1;
 
 static const uint8_t CMD_PING = 1;
@@ -41,9 +42,10 @@ static const uint8_t OPTION_CHUNK_HEADER_LEN = 5;   // x_hi, x_lo, y_hi, y_lo, s
 
 class SPIDriver {
 private:
-  ESP32DMASPI::Slave slave;
-  uint8_t* dma_tx_buf;
-  uint8_t* dma_rx_buf;
+  // ESP32DMASPI::Slave slave;
+  ESP32SPISlave slave;
+  uint8_t dma_tx_buf[SPI_MISO_BUFFER_SIZE];
+  uint8_t dma_rx_buf[SPI_MOSI_BUFFER_SIZE] = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};
 
   // Variables for context management
   uint8_t expecting_bufs;
@@ -188,14 +190,14 @@ private:
 
 public:
   SPIDriver() 
-    : dma_tx_buf(slave.allocDMABuffer(SPI_MISO_BUFFER_SIZE))
-    , dma_rx_buf(slave.allocDMABuffer(SPI_MOSI_BUFFER_SIZE))
-    , expecting_bufs(0)
+    // : dma_tx_buf(slave.allocDMABuffer(SPI_MISO_BUFFER_SIZE))
+    // , dma_rx_buf(slave.allocDMABuffer(SPI_MOSI_BUFFER_SIZE))
+    : expecting_bufs(0)
     , expecting_container(nullptr)
     , last_ping_time(0)
     {
       slave.setDataMode(SPI_MODE0);
-      slave.setMaxTransferSize(SPI_MOSI_BUFFER_SIZE);
+      // slave.setMaxTransferSize(SPI_MOSI_BUFFER_SIZE);
       slave.setQueueSize(QUEUE_SIZE);
 
       // begin() after setting
@@ -206,7 +208,7 @@ public:
     // if no transaction is in flight and all results are handled, queue new transactions
     if (slave.hasTransactionsCompletedAndAllResultsHandled()) {
       // do some initialization for tx_buf and rx_buf
-      slave.queue(NULL, dma_rx_buf, SPI_MOSI_BUFFER_SIZE);
+      slave.queue(NULL, dma_rx_buf, 16);
       slave.trigger();      // finally, we should trigger transaction in the background
     }
   }
@@ -226,7 +228,7 @@ public:
       TextGroup* group = new TextGroup(0, RED);
 
       String content = " ";
-      for (size_t i = 0;i < received_bytes[0];i++) {
+      for (size_t i = 0;i < 32;i++) {
         content += dma_rx_buf[i];
         content += " ";
       }
