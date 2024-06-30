@@ -48,5 +48,5 @@ void loop()
   // Messages
   screen->enqueue_vec(spid->process_msgs());
   Serial.println("Message Received and Processed");
-  delay(1000);
+  delay(1);
 }
