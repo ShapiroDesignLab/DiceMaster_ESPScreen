@@ -9,9 +9,7 @@
 
 #include "Media.h"
 
-extern bool __DEBUG;
-extern bool ESP_WORKING;
-
+namespace dice {
 
 static const size_t SPI_MOSI_BUFFER_SIZE = 1024;  // 2k buffer
 static const size_t SPI_MISO_BUFFER_SIZE = 1024;    // probably not using for now
@@ -223,22 +221,21 @@ public:
       const std::vector<size_t> received_bytes = slave.numBytesReceivedAll();
       size_t len_counter = 0;
 
-      String msg1 = "Received messages ";
-      msg1 += received_bytes.size();
-      String msg2 = "First one length ";
-      msg2 += received_bytes[0];
-      // Serial.println(msg);
-      TextGroup* group = new TextGroup(0, RED);
+      // String msg1 = "Received messages ";
+      // msg1 += received_bytes.size();
+      // String msg2 = "First one length ";
+      // msg2 += received_bytes[0];
+      // TextGroup* group = new TextGroup(0, RED);
 
-      String content = " ";
-      for (size_t i = 0;i < 32;i++) {
-        content += dma_rx_buf[i];
-        content += " ";
-      }
-      group->add_member(new Text(msg1, 0, u8g2_font_unifont_tf, 40, 40));
-      group->add_member(new Text(msg2, 0, u8g2_font_unifont_tf, 40, 120));
-      group->add_member(new Text(content, 0, u8g2_font_unifont_tf, 40, 180));
-      vec.push_back(group);
+      // String content = " ";
+      // for (size_t i = 0;i < 32;i++) {
+      //   content += dma_rx_buf[i];
+      //   content += " ";
+      // }
+      // group->add_member(new Text(msg1, 0, u8g2_font_unifont_tf, 40, 40));
+      // group->add_member(new Text(msg2, 0, u8g2_font_unifont_tf, 40, 120));
+      // group->add_member(new Text(content, 0, u8g2_font_unifont_tf, 40, 180));
+      // vec.push_back(group);
 
       // For each received message, deal with it and return a vector of containers
       for (auto buf_len : received_bytes) {
@@ -252,5 +249,6 @@ public:
   }
 };
 
+} // namespace dice
 
 #endif

@@ -1,8 +1,7 @@
 #include "SPI_Driver.h"
 #include "Screen_Driver.h"
 
-bool ESP_WORKING = true;
-bool __DEBUG = true;
+using namespace dice;
 
 Screen* screen;
 SPIDriver* spid;
@@ -19,9 +18,6 @@ void setup(void)
 
   spid = new SPIDriver();
   screen = new Screen();
-
-  // screen->draw_text_demo();
-  // screen->update();
 }
 
 void loop()
@@ -34,10 +30,9 @@ void loop()
   // delay(1000); 
 
   // // Draw Text
-  // screen->draw_text_demo();
+  // screen->enqueue(get_demo_text_group());
   // screen->update();
   // delay(1000); 
-
 
 
   // Queue Message Receipt
@@ -48,5 +43,5 @@ void loop()
   // Messages
   screen->enqueue_vec(spid->process_msgs());
   Serial.println("Message Received and Processed");
-  delay(1);
+  delay(10);
 }

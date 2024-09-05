@@ -13,8 +13,7 @@
 #include "Media.h"
 
 
-extern bool __DEBUG;
-extern bool ESP_WORKING;
+namespace dice {
 
 // SETUP
 static const bool BACKLIGHT_ON = true;
@@ -114,7 +113,6 @@ private:
   }
 
   void draw_textgroup(MediaContainer* tg) {
-    if (__DEBUG) Serial.println(tg->get_media_type() == MEDIA_TEXTGROUP);
     assert(tg->get_media_type() == MEDIA_TEXTGROUP);
     draw_color(DARKGREY);
     gfx->setTextSize(2);
@@ -159,7 +157,7 @@ private:
         Serial.println("Unsupported Media Type Encountered!");
         break;
     }
-    current_disp->trigger();
+    current_disp->trigger_();
   }
 
 public:
@@ -243,20 +241,6 @@ public:
     return !expander->digitalRead(PCA_BUTTON_UP);
   }
 
-  // Demo Functions
-  void draw_text_demo() {
-    TextGroup* group = new TextGroup(0, RED);
-    group->add_member(new Text("Psíquico", 0, u8g2_font_unifont_tf, 40, 40));
-    group->add_member(new Text("Hellseher", 0, u8g2_font_unifont_tf, 280, 40));
-    group->add_member(new Text("экстрасенс", 0, u8g2_font_cu12_t_cyrillic, 40, 160));
-    group->add_member(new Text("Psychique", 0, u8g2_font_unifont_tf, 280, 160));
-    group->add_member(new Text("Psychic", 0, u8g2_font_unifont_tf, 40, 280));
-    group->add_member(new Text("मानसिक", 0, u8g2_font_unifont_t_devanagari, 280, 280));
-    group->add_member(new Text("靈媒", 0, u8g2_font_unifont_t_chinese, 40, 400));
-    group->add_member(new Text("نفسية", 0, u8g2_font_unifont_t_arabic, 280, 400));
-    enqueue(group);
-  }
-
   void draw_startup_logo() {
     MediaContainer* med = new Image((size_t)1, IMG_480, (size_t)0);
     med->add_decoded(umlogo);
@@ -264,5 +248,21 @@ public:
   }
 };
 
+
+// Demo Functions
+void get_demo_textgroup() {
+  TextGroup* group = new TextGroup(0, RED);
+  group->add_member(new Text("Psíquico", 0, u8g2_font_unifont_tf, 40, 40));
+  group->add_member(new Text("Hellseher", 0, u8g2_font_unifont_tf, 280, 40));
+  group->add_member(new Text("экстрасенс", 0, u8g2_font_cu12_t_cyrillic, 40, 160));
+  group->add_member(new Text("Psychique", 0, u8g2_font_unifont_tf, 280, 160));
+  group->add_member(new Text("Psychic", 0, u8g2_font_unifont_tf, 40, 280));
+  group->add_member(new Text("मानसिक", 0, u8g2_font_unifont_t_devanagari, 280, 280));
+  group->add_member(new Text("靈媒", 0, u8g2_font_unifont_t_chinese, 40, 400));
+  group->add_member(new Text("نفسية", 0, u8g2_font_unifont_t_arabic, 280, 400));
+  return group;
+}
+
+} // namespace dice
 
 #endif
