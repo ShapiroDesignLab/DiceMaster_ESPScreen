@@ -4,8 +4,6 @@
 #include <deque>
 #include <vector>
 
-// #include <Adafruit_FT6206.h>   // These rae included in the demo file, but probably for 
-// #include <Adafruit_CST8XX.h>
 #include <U8g2lib.h>
 #include <Arduino_GFX_Library.h>
 
@@ -21,7 +19,6 @@ static const bool BACKLIGHT_OFF = false;
 
 static const uint8_t WORK_DELAY = 1;
 static const uint8_t HYB_DELAY = 200;
-
 
 
 class Screen {
@@ -51,48 +48,7 @@ private:
     || med->get_media_type() == MEDIA_OPTION_END);
   }
 
-  void enqueue(MediaContainer* med) {
-    // If nothing is added
-    if (med == nullptr) return;
-
-    // If adding image or text
-    if (med->get_media_type() == MEDIA_IMAGE 
-      || med->get_media_type() == MEDIA_TEXTGROUP
-      || med->get_media_type() == MEDIA_TEXT) {
-      display_queue.push_back(med);
-      return;
-    }
-
-    // If add options
-    if (med->get_media_type() == MEDIA_OPTION) {
-      display_queue.push_front(med);
-      if (!display_queue.empty() 
-        && display_queue.front()->get_media_type() == MEDIA_OPTION_BLOCKING) 
-        return;
-      display_queue.push_front(new MediaContainer(MEDIA_OPTION_BLOCKING, 0)); 
-      return;
-    }
-
-    // If end of options
-    if (med->get_media_type() == MEDIA_OPTION_END) {
-      while (!display_queue.empty() 
-        && is_option_media(display_queue.front())) {
-        display_queue.pop_front();
-      }
-      return;
-    }
-
-    // If adding options
-    if (med->get_media_type() == MEDIA_BACKLIGHT_ON) {
-      set_backlight(BACKLIGHT_ON);
-      return;
-    }
-    if (med->get_media_type() == MEDIA_BACKLIGHT_OFF) {
-      set_backlight(BACKLIGHT_OFF);
-      return;
-    }
-    return;
-  }
+  
 
   // Draw image
   void draw_img(MediaContainer* med) {
@@ -157,7 +113,7 @@ private:
         Serial.println("Unsupported Media Type Encountered!");
         break;
     }
-    current_disp->trigger_();
+    current_disp->trigger_display();
   }
 
 public:
@@ -199,15 +155,53 @@ public:
 
     draw_startup_logo();
 
-    Serial.println("Screen Initialized!");
+    // Serial.println("Screen Initialized!");
   }
 
-  void enqueue_vec(std::vector<MediaContainer*> med) {
-    Serial.println(med.size());
-    for (size_t i = 0;i < med.size(); ++i) {
-      enqueue(med[i]);
+
+  void enqueue(MediaContainer* med) {
+    // If nothing is added
+    if (med == nullptr) return;
+
+    // If adding image or text
+    if (med->get_media_type() == MEDIA_IMAGE 
+      || med->get_media_type() == MEDIA_TEXTGROUP
+      || med->get_media_type() == MEDIA_TEXT) {
+      display_queue.push_back(med);
+      return;
     }
-    Serial.println(display_queue.size());
+
+    // If add options
+    if (med->get_media_type() == MEDIA_OPTION) {
+      display_queue.push_front(med);
+      if (!display_queue.empty() 
+        && display_queue.front()->get_media_type() == MEDIA_OPTION_BLOCKING) 
+        return;
+      display_queue.push_front(new MediaContainer(MEDIA_OPTION_BLOCKING, 0)); 
+      return;
+    }
+
+    // If end of options
+    if (med->get_media_type() == MEDIA_OPTION_END) {
+      while (!display_queue.empty() 
+        && is_option_media(display_queue.front())) {
+        display_queue.pop_front();
+      }
+      return;
+    }
+
+    // If adding options
+    if (med->get_media_type() == MEDIA_BACKLIGHT_ON) {
+      set_backlight(BACKLIGHT_ON);
+      return;
+    }
+
+    // If backlight off
+    if (med->get_media_type() == MEDIA_BACKLIGHT_OFF) {
+      set_backlight(BACKLIGHT_OFF);
+      return;
+    }
+    return;
   }
 
   void update() {
@@ -250,7 +244,7 @@ public:
 
 
 // Demo Functions
-void get_demo_textgroup() {
+MediaContainer* get_demo_textgroup() {
   TextGroup* group = new TextGroup(0, RED);
   group->add_member(new Text("Psíquico", 0, u8g2_font_unifont_tf, 40, 40));
   group->add_member(new Text("Hellseher", 0, u8g2_font_unifont_tf, 280, 40));
