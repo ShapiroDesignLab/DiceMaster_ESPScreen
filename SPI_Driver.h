@@ -3,267 +3,428 @@
 
 #include <vector>
 #include <string>
+#include <map>
 
 #include <ESP32DMASPISlave.h>
-// #include <ESP32SPISlave.h>
-
 #include "Media.h"
 
 namespace dice {
 
-static const size_t SPI_MOSI_BUFFER_SIZE = 1024;  // 2k buffer
-static const size_t SPI_MISO_BUFFER_SIZE = 1024;    // probably not using for now
-static const size_t QUEUE_SIZE = 1;
+// SPI Buffer Sizes
+constexpr size_t SPI_MOSI_BUFFER_SIZE = 2048;  // Adjust as needed
+constexpr size_t SPI_MISO_BUFFER_SIZE = 256;   // For ACK/NACK messages
+constexpr size_t QUEUE_SIZE = 1;
 
-static const uint8_t CMD_PING = 1;
-static const uint8_t CMD_NEW_IMG = 3;
-static const uint8_t CMD_TEXT = 31;
-static const uint8_t CMD_OPTIONS = 63;
-static const uint8_t CMD_OPTIONS_END = 64;
-static const uint8_t CMD_BACKLIGHT_ON = 253;
-static const uint8_t CMD_BACKLIGHT_OFF = 254;
+// Enums for Message Types
+enum class MessageType : uint8_t {
+    TEXT_BATCH = 0x01,
+    IMAGE_TRANSFER_START = 0x02,
+    IMAGE_CHUNK = 0x03,
+    IMAGE_TRANSFER_END = 0x04,
+    OPTION_LIST = 0x05,
+    OPTION_SELECTION_UPDATE = 0x06,
+    GIF_TRANSFER_START = 0x07,
+    GIF_FRAME = 0x08,
+    GIF_TRANSFER_END = 0x09,
+    BACKLIGHT_CONTROL = 0x0A,
+    ACK = 0x0B,
+    ERROR = 0x0C
+};
 
-// Image Header info
-static const uint8_t IMG_HEADER_LEN = 4;            // CMD, nChunks, resolution, enforced time
+// Enums for Error Codes
+enum class ErrorCode : uint8_t {
+    SUCCESS = 0x00,
+    UNKNOWN_MSG_TYPE = 0x01,
+    INVALID_FORMAT = 0x02,
+    CHECKSUM_ERROR = 0x03,
+    IMAGE_ID_MISMATCH = 0x04,
+    PAYLOAD_LENGTH_MISMATCH = 0x05,
+    UNSUPPORTED_IMAGE_FORMAT = 0x06,
+    OUT_OF_MEMORY = 0x07,
+    INTERNAL_ERROR = 0x08,
+    INVALID_OPTION_INDEX = 0x09
+};
 
-// For Text
-static const uint8_t TEXTGROUP_HEADER_LEN = 4;      // enforced time, color
-static const uint8_t TEXT_CHUNK_HEADER_LEN = 6;     // x_hi, x_lo, y_hi, y_lo, font, size
-
-// For Options
-static const uint8_t OPTION_HEADER_LEN = 2;         // CMD, selecting
-static const uint8_t OPTION_CHUNK_HEADER_LEN = 5;   // x_hi, x_lo, y_hi, y_lo, size
-
-// SPI Protocol related
-
+// SPI Protocol constants
+constexpr uint8_t SOF_MARKER = 0x7E;
 
 class SPIDriver {
 private:
-  ESP32DMASPI::Slave slave;
-  uint8_t* dma_tx_buf;
-  uint8_t* dma_rx_buf;
+    ESP32DMASPI::Slave slave;
+    uint8_t* dma_tx_buf;
+    uint8_t* dma_rx_buf;
 
-  // ESP32SPISlave slave;
-  // uint8_t dma_tx_buf[SPI_MISO_BUFFER_SIZE];
-  // uint8_t dma_rx_buf[SPI_MOSI_BUFFER_SIZE] = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};
+    // Context Management
+    uint8_t expecting_image_id;
+    MediaContainer* expecting_container;
+    std::map<uint8_t, MediaContainer*> ongoing_transfers;
 
-  // Variables for context management
-  uint8_t expecting_bufs;
-  MediaContainer* expecting_container;
+    // Acknowledgment and Error Handling
+    void send_ack(uint8_t message_id, ErrorCode status_code);
+    void send_error(uint8_t message_id, ErrorCode error_code, const std::string& error_msg);
 
-  // Pinging message
-  size_t last_ping_time;
+    // Parsing Functions
+    MediaContainer* parse_message(uint8_t* buf, size_t buf_size);
+    MediaContainer* handle_text_batch(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_image_transfer_start(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_image_chunk(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_image_transfer_end(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_option_list(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_option_selection_update(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_backlight_control(uint8_t* payload, size_t payload_length, uint8_t message_id);
 
-  MediaContainer* pop_expect() {
-    MediaContainer* rtn = expecting_container;
-    expecting_bufs = 0;
-    expecting_container = nullptr;
-    return rtn;
-  }
-
-  // Chunk is defined with first 4 bytes being 255
-  bool is_chunk(uint8_t* buf, size_t buf_size) {
-    return (buf_size >= 4 
-            && buf[0] == 255 
-            && buf[1] == 255 
-            && buf[2] == 255 
-            && buf[3] == 255);
-  }
-
-  MediaContainer* parse(uint8_t* buf, size_t buf_size) {
-    // All messages must be at least 4 bytes in length
-    if (buf_size < 4){   
-      return nullptr;
-    }
-    // Make sure first four bytes is same, indicating a 
-    if ((buf[1] != buf[0]) || (buf[2] != buf[0]) || (buf[3] != buf[0])) {
-      return nullptr;
-    }
-
-    // If expecting image, just push
-    if (expecting_bufs > 0) {
-      if (is_chunk(buf, buf_size)){
-        switch (expecting_container->get_media_type()) {
-          case MEDIA_IMAGE:   // If awaiting image, add to image
-            return add2img(buf, buf_size);
-          default:          // Other container types are not supported for now
-            break;
-        }
-      }
-      else { pop_expect(); }
-    }
-
-    // Otherwise, this is a message header, parse it
-    switch (buf[0]) {
-      case CMD_PING: 
-        last_ping_time = millis();
-        return new Text("Received Ping command");
-        return nullptr;
-      case CMD_NEW_IMG:
-        return new Text("Received Image Command");
-        return make_img(buf+4, buf_size-4);
-      case CMD_TEXT:
-        return new Text("Received Text Command");
-        return make_txt_group(buf+4, buf_size-4);
-      case CMD_OPTIONS:
-        return new Text("Received Option command");
-        return make_options(buf+4, buf_size-4);
-      case CMD_OPTIONS_END:
-        return new Text("Received Option End command");
-        return new MediaContainer(MEDIA_OPTION_END, 0);
-      case CMD_BACKLIGHT_ON:
-        return new Text("Received Backlight on");
-        return new MediaContainer(MEDIA_BACKLIGHT_ON, 0);
-      case CMD_BACKLIGHT_OFF:
-        return new Text("Received Backlight off");
-        return new MediaContainer(MEDIA_BACKLIGHT_OFF, 0);
-    }
-  }
-
-  // Image parsing functions
-  MediaContainer* add2img(uint8_t* buf, size_t buf_size) {
-    assert(expecting_container != nullptr);
-    expecting_container->add_chunk(dma_rx_buf, buf_size);
-    if (expecting_container->get_status() >= STATUS_DECODING) {
-      return pop_expect();
-    }
-    return nullptr;
-  }
-
-  MediaContainer* make_img(uint8_t* buf, size_t buf_size) {
-    assert(!expecting_bufs);
-    expecting_bufs = buf[1];
-    expecting_container = new Image(buf[2], buf[3], buf[4]);
-    if (buf_size > 5) {       // If there is payload immediately after, add those
-      add2img(buf+5, buf_size-5);
-    }
-    return nullptr;
-  }
-
-  // Text parsing functions
-  MediaContainer* make_txt_group(uint8_t* buf, size_t buf_size) {
-    // buf here is free of command header
-    if (buf_size < 4) return nullptr;
-    // If an image transfer is in progress, ditch results
-    if (expecting_bufs) pop_expect();
-
-    // Parse text transfer message
-    const uint8_t up_time = buf[0];
-    MediaContainer* txt_group = new TextGroup(up_time, RGB565(buf[1], buf[2], buf[3]));
-
-    // Parse each text group
-    uint8_t* payload = buf + TEXTGROUP_HEADER_LEN;   // First 4 bytes are header info
-    buf_size -= TEXTGROUP_HEADER_LEN;
-
-    while (buf_size > TEXT_CHUNK_HEADER_LEN) {        // At least 6 headers with 1 actual word
-      // Unpack header content
-      const uint16_t x_pos = payload[0]*255 + payload[1];
-      const uint16_t y_pos = payload[2]*255 + payload[3];
-      const uint8_t* font = map_font(payload[4]);
-      const uint8_t len_msg = payload[5];
-      payload += TEXT_CHUNK_HEADER_LEN;
-      buf_size -= TEXT_CHUNK_HEADER_LEN;
-
-      // Add to container
-      assert(payload[TEXT_CHUNK_HEADER_LEN-1] == 0);      // Last byte of char must be zero  
-      MediaContainer* txt = new Text((char*)payload+TEXT_CHUNK_HEADER_LEN, up_time, font, x_pos, y_pos);
-      txt_group->add_member(txt);
-      
-      // Deal with Next Chunk
-      payload += len_msg;
-      buf_size -= len_msg;
-    }
-  }
-
-  // Options parsing functions
-  MediaContainer* make_options(uint8_t* buf, size_t buf_size) {
-    assert(!expecting_bufs);
-    MediaContainer* txt_group = new OptionGroup(buf[1]);
-
-    // Parse each text group
-    uint8_t* payload = buf + OPTION_HEADER_LEN;   // First 2 bytes are header info
-    buf_size -= OPTION_HEADER_LEN;
-
-    // while (buf_size >= OPTION_CHUNK_HEADER_LEN) {        // At least 6 headers, 1 byte actual word, 1 byte stop word
-    //   if (payload[5] > 1) {       // At least 1 byte actual word, 1 byte stop word
-    //     MediaContainer* txt = new Text((char*)payload+5, 0, u8g2_font_unifont_tf
-    //                                 , (uint16_t) payload[0]*255 + payload[1]
-    //                                 , (uint16_t) payload[2]*255 + payload[3]);
-    //     assert(payload[OPTION_CHUNK_HEADER_LEN + payload[4]] == '\0');      // Last byte of char must be zero      
-    //     txt_group->add_member(txt);
-    //   }
-    //   // Deal with Next Chunk
-    //   size_t txt_chunk_len = payload[4] + OPTION_CHUNK_HEADER_LEN;
-    //   payload += txt_chunk_len;
-    //   buf_size -= txt_chunk_len;
-    // }
-  }
+    // Utility Functions
+    uint8_t calculate_checksum(uint8_t* data, size_t length);
+    bool validate_checksum(uint8_t* buf, size_t buf_size);
+    uint16_t bytes_to_uint16(uint8_t high_byte, uint8_t low_byte);
+    uint32_t bytes_to_uint32(uint8_t* bytes);
+    void reset_expectations();
 
 public:
-  SPIDriver() 
-    : dma_tx_buf(slave.allocDMABuffer(SPI_MISO_BUFFER_SIZE))
-    , dma_rx_buf(slave.allocDMABuffer(SPI_MOSI_BUFFER_SIZE))
-    , expecting_bufs(0)
-    , expecting_container(nullptr)
-    , last_ping_time(0)
+    SPIDriver()
+        : dma_tx_buf(nullptr)
+        , dma_rx_buf(nullptr)
+        , expecting_image_id(0)
+        , expecting_container(nullptr)
     {
-      slave.setDataMode(SPI_MODE0);
-      slave.setMaxTransferSize(SPI_MOSI_BUFFER_SIZE);
-      slave.setQueueSize(QUEUE_SIZE);
+        // Initialize SPI Slave
+        dma_tx_buf = slave.allocDMABuffer(SPI_MISO_BUFFER_SIZE);
+        dma_rx_buf = slave.allocDMABuffer(SPI_MOSI_BUFFER_SIZE);
 
-      slave.begin();  // default: HSPI (please refer README for pin assignments)
+        slave.setDataMode(SPI_MODE0);
+        slave.setMaxTransferSize(SPI_MOSI_BUFFER_SIZE);
+        slave.setQueueSize(QUEUE_SIZE);
+
+        slave.begin(); // Default HSPI
     }
 
-  void queue_cmd_msgs() {
-    // if no transaction is in flight and all results are handled, queue new transactions
-    if (slave.hasTransactionsCompletedAndAllResultsHandled()) {
-      // do some initialization for tx_buf and rx_buf
-      slave.queue(NULL, dma_rx_buf, 1024);
-      slave.trigger();      // finally, we should trigger transaction in the background
+    void queue_cmd_msgs() {
+        if (slave.hasTransactionFinished()) {
+            // Queue a new transaction
+            slave.queue(dma_tx_buf, dma_rx_buf, SPI_MOSI_BUFFER_SIZE);
+            slave.clearTransaction();
+        }
     }
-  }
 
-  std::vector<MediaContainer*> process_msgs() {   // Update function to be called in 
-    std::vector<MediaContainer*> vec;
-    // if all transactions are completed and all results are ready, handle results
-    if (slave.hasTransactionsCompletedAndAllResultsReady(QUEUE_SIZE)) {
-      const std::vector<size_t> received_bytes = slave.numBytesReceivedAll();
-      size_t len_counter = 0;
+    std::vector<MediaContainer*> process_msgs() {
+        std::vector<MediaContainer*> media_vec;
 
+        if (slave.hasTransactionFinished()) {
+            size_t received_length = slave.getTransferSize();
 
-      /********
-      DEBUG ONLY START
-      ********/
-      String msg1 = "Received messages ";
-      msg1 += received_bytes.size();
-      String msg2 = "First one length ";
-      msg2 += received_bytes[0];
-      TextGroup* group = new TextGroup(0, RED);
+            if (received_length > 0) {
+                MediaContainer* media = parse_message(dma_rx_buf, received_length);
+                if (media != nullptr) {
+                    media_vec.push_back(media);
+                }
+            }
+        }
 
-      String content = " ";
-      for (size_t i = 0;i < 32;i++) {
-        content += dma_rx_buf[i];
-        content += " ";
-      }
-      group->add_member(new Text(msg1, 0, u8g2_font_unifont_tf, 40, 40));
-      group->add_member(new Text(msg2, 0, u8g2_font_unifont_tf, 40, 120));
-      group->add_member(new Text(content, 0, u8g2_font_unifont_tf, 40, 180));
-      vec.push_back(group);
-      /********
-      DEBUG ONLY END
-      ********/
-
-
-      // For each received message, deal with it and return a vector of containers
-      for (auto buf_len : received_bytes) {
-        MediaContainer* res = parse(dma_rx_buf + len_counter, buf_len);
-        if (res != nullptr) vec.push_back(res);
-        len_counter += buf_len;
-      }
+        return media_vec;
     }
-    Serial.println(vec.size());
-    return vec;
-  }
+
+private:
+    uint8_t calculate_checksum(uint8_t* data, size_t length) {
+        uint8_t checksum = 0;
+        for (size_t i = 0; i < length; ++i) {
+            checksum ^= data[i];
+        }
+        return checksum;
+    }
+
+    bool validate_checksum(uint8_t* buf, size_t buf_size) {
+        if (buf_size < 6) {
+            // Minimum message size is 6 bytes
+            return false;
+        }
+        uint16_t payload_length = (buf[3] << 8) | buf[4];
+        size_t expected_size = 6 + payload_length; // Header + Payload + Checksum
+
+        if (buf_size != expected_size) {
+            return false;
+        }
+
+        uint8_t calculated_checksum = calculate_checksum(&buf[1], 4 + payload_length); // From Message Type to end of Payload
+        uint8_t received_checksum = buf[5 + payload_length];
+
+        return calculated_checksum == received_checksum;
+    }
+
+    uint16_t bytes_to_uint16(uint8_t high_byte, uint8_t low_byte) {
+        return (static_cast<uint16_t>(high_byte) << 8) | low_byte;
+    }
+
+    uint32_t bytes_to_uint32(uint8_t* bytes) {
+        return (static_cast<uint32_t>(bytes[0]) << 24) |
+               (static_cast<uint32_t>(bytes[1]) << 16) |
+               (static_cast<uint32_t>(bytes[2]) << 8) |
+               bytes[3];
+    }
+
+    void reset_expectations() {
+        expecting_image_id = 0;
+        expecting_container = nullptr;
+    }
+
+    void send_ack(uint8_t message_id, ErrorCode status_code) {
+        uint8_t ack_msg[7];
+        ack_msg[0] = SOF_MARKER;
+        ack_msg[1] = static_cast<uint8_t>(MessageType::ACK);
+        ack_msg[2] = message_id;
+        ack_msg[3] = 0x00; // Payload Length High Byte
+        ack_msg[4] = 0x01; // Payload Length Low Byte
+        ack_msg[5] = static_cast<uint8_t>(status_code); // Status Code
+        ack_msg[6] = calculate_checksum(&ack_msg[1], 5); // Checksum
+
+        // Send ACK message
+        slave.queue(ack_msg, nullptr, sizeof(ack_msg));
+    }
+
+    void send_error(uint8_t message_id, ErrorCode error_code, const std::string& error_msg) {
+        size_t error_msg_length = error_msg.size();
+        size_t total_length = 7 + error_msg_length; // Header + Payload + Checksum
+
+        uint8_t* error_packet = new uint8_t[total_length];
+        error_packet[0] = SOF_MARKER;
+        error_packet[1] = static_cast<uint8_t>(MessageType::ERROR);
+        error_packet[2] = message_id;
+        error_packet[3] = 0x00; // Payload Length High Byte
+        error_packet[4] = static_cast<uint8_t>(1 + 1 + error_msg_length); // Payload Length Low Byte
+        error_packet[5] = static_cast<uint8_t>(error_code);
+        error_packet[6] = static_cast<uint8_t>(error_msg_length);
+
+        memcpy(&error_packet[7], error_msg.c_str(), error_msg_length);
+
+        error_packet[7 + error_msg_length] = calculate_checksum(&error_packet[1], 5 + error_msg_length);
+
+        // Send Error message
+        slave.queue(error_packet, nullptr, total_length);
+
+        delete[] error_packet;
+    }
+
+    MediaContainer* parse_message(uint8_t* buf, size_t buf_size) {
+        if (buf[0] != SOF_MARKER) {
+            // Invalid Start of Frame
+            return nullptr;
+        }
+
+        if (!validate_checksum(buf, buf_size)) {
+            // Checksum error
+            uint8_t message_id = buf[2];
+            send_error(message_id, ErrorCode::CHECKSUM_ERROR, "Checksum Error");
+            return nullptr;
+        }
+
+        MessageType message_type = static_cast<MessageType>(buf[1]);
+        uint8_t message_id = buf[2];
+        uint16_t payload_length = (buf[3] << 8) | buf[4];
+        uint8_t* payload = &buf[5];
+
+        switch (message_type) {
+            case MessageType::TEXT_BATCH:
+                return handle_text_batch(payload, payload_length, message_id);
+            case MessageType::IMAGE_TRANSFER_START:
+                return handle_image_transfer_start(payload, payload_length, message_id);
+            case MessageType::IMAGE_CHUNK:
+                return handle_image_chunk(payload, payload_length, message_id);
+            case MessageType::IMAGE_TRANSFER_END:
+                return handle_image_transfer_end(payload, payload_length, message_id);
+            case MessageType::OPTION_LIST:
+                return handle_option_list(payload, payload_length, message_id);
+            case MessageType::OPTION_SELECTION_UPDATE:
+                return handle_option_selection_update(payload, payload_length, message_id);
+            case MessageType::BACKLIGHT_CONTROL:
+                return handle_backlight_control(payload, payload_length, message_id);
+            default:
+                // Unknown Message Type
+                send_error(message_id, ErrorCode::UNKNOWN_MSG_TYPE, "Unknown Message Type");
+                return nullptr;
+        }
+    }
+
+    MediaContainer* handle_text_batch(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+        if (payload_length < 5) {
+            send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Text Batch");
+            return nullptr;
+        }
+
+        uint16_t bg_color = (payload[0] << 8) | payload[1];
+        uint16_t font_color = (payload[2] << 8) | payload[3];
+        uint8_t num_items = payload[4];
+        size_t offset = 5;
+
+        TextGroup* text_group = new TextGroup(0, bg_color, font_color);
+
+        for (uint8_t i = 0; i < num_items; ++i) {
+            if (offset + 8 > payload_length) {
+                send_error(message_id, ErrorCode::INVALID_FORMAT, "Insufficient data for text item");
+                delete text_group;
+                return nullptr;
+            }
+
+            uint16_t x_pos = bytes_to_uint16(payload[offset], payload[offset + 1]);
+            uint16_t y_pos = bytes_to_uint16(payload[offset + 2], payload[offset + 3]);
+            FontID font_id = static_cast<FontID>(payload[offset + 4]);
+            uint8_t text_length = payload[offset + 5];
+
+            if (offset + 6 + text_length > payload_length) {
+                send_error(message_id, ErrorCode::INVALID_FORMAT, "Text length exceeds payload");
+                delete text_group;
+                return nullptr;
+            }
+
+            String text = String((char*)&payload[offset + 6], text_length);
+            Text* txt = new Text(text, 0, font_id, x_pos, y_pos);
+            text_group->add_member(txt);
+
+            offset += 6 + text_length;
+        }
+
+        send_ack(message_id, ErrorCode::SUCCESS);
+        return text_group;
+    }
+
+    MediaContainer* handle_image_transfer_start(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+        if (payload_length < 8) {
+            send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Image Transfer Start");
+            return nullptr;
+        }
+
+        uint8_t image_id = payload[0];
+        ImageFormat image_format = static_cast<ImageFormat>(payload[1]);
+        uint32_t total_size = bytes_to_uint32(&payload[2]);
+        uint16_t delay_time = bytes_to_uint16(payload[6], payload[7]);
+
+        if (ongoing_transfers.find(image_id) != ongoing_transfers.end()) {
+            send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID already in use");
+            return nullptr;
+        }
+
+        Image* image = new Image(image_id, image_format, total_size, delay_time, 0);
+
+        if (image->get_status() == MediaStatus::EXPIRED) {
+            send_error(message_id, ErrorCode::OUT_OF_MEMORY, "Failed to allocate memory for image");
+            delete image;
+            return nullptr;
+        }
+
+        ongoing_transfers[image_id] = image;
+        send_ack(message_id, ErrorCode::SUCCESS);
+        return nullptr;
+    }
+
+    MediaContainer* handle_image_chunk(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+        if (payload_length < 3) {
+            send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Image Chunk");
+            return nullptr;
+        }
+
+        uint8_t image_id = payload[0];
+        uint16_t chunk_number = bytes_to_uint16(payload[1], payload[2]);
+        size_t chunk_data_length = payload_length - 3;
+        uint8_t* chunk_data = &payload[3];
+
+        auto it = ongoing_transfers.find(image_id);
+        if (it == ongoing_transfers.end()) {
+            send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID not found for chunk");
+            return nullptr;
+        }
+
+        Image* image = static_cast<Image*>(it->second);
+        image->add_chunk(chunk_number, chunk_data, chunk_data_length);
+
+        send_ack(message_id, ErrorCode::SUCCESS);
+        return nullptr;
+    }
+
+    MediaContainer* handle_image_transfer_end(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+        if (payload_length != 1) {
+            send_error(message_id, ErrorCode::INVALID_FORMAT, "Invalid payload length for Image Transfer End");
+            return nullptr;
+        }
+
+        uint8_t image_id = payload[0];
+        auto it = ongoing_transfers.find(image_id);
+        if (it == ongoing_transfers.end()) {
+            send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID not found for transfer end");
+            return nullptr;
+        }
+
+        Image* image = static_cast<Image*>(it->second);
+        ongoing_transfers.erase(it);
+
+        send_ack(message_id, ErrorCode::SUCCESS);
+        return image; // Return the completed image for display
+    }
+
+    MediaContainer* handle_option_list(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+        if (payload_length < 2) {
+            send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Option List");
+            return nullptr;
+        }
+
+        uint8_t selected_index = payload[0];
+        uint8_t num_options = payload[1];
+        size_t offset = 2;
+
+        OptionGroup* option_group = new OptionGroup(selected_index);
+
+        for (uint8_t i = 0; i < num_options; ++i) {
+            if (offset >= payload_length) {
+                send_error(message_id, ErrorCode::INVALID_FORMAT, "Insufficient data for option");
+                delete option_group;
+                return nullptr;
+            }
+
+            uint8_t option_length = payload[offset];
+            if (offset + 1 + option_length > payload_length) {
+                send_error(message_id, ErrorCode::INVALID_FORMAT, "Option length exceeds payload");
+                delete option_group;
+                return nullptr;
+            }
+
+            String option_text = String((char*)&payload[offset + 1], option_length);
+            option_group->add_option(option_text);
+
+            offset += 1 + option_length;
+        }
+
+        send_ack(message_id, ErrorCode::SUCCESS);
+        return option_group;
+    }
+
+    MediaContainer* handle_option_selection_update(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+        if (payload_length != 1) {
+            send_error(message_id, ErrorCode::INVALID_FORMAT, "Invalid payload length for Option Selection Update");
+            return nullptr;
+        }
+
+        uint8_t selected_index = payload[0];
+
+        // Update the current option group if available
+        // Assuming there's a current_option_group variable or method to handle this
+        // current_option_group->set_selected_index(selected_index);
+
+        send_ack(message_id, ErrorCode::SUCCESS);
+        return nullptr;
+    }
+
+    MediaContainer* handle_backlight_control(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+        if (payload_length != 1) {
+            send_error(message_id, ErrorCode::INVALID_FORMAT, "Invalid payload length for Backlight Control");
+            return nullptr;
+        }
+
+        uint8_t state = payload[0];
+
+        // Control the backlight accordingly
+        // Assuming there's a function to set backlight
+        // set_backlight(state == 0x01);
+
+        send_ack(message_id, ErrorCode::SUCCESS);
+        return new MediaContainer(MediaType::BACKLIGHT_CONTROL, 0);
+    }
 };
 
 } // namespace dice

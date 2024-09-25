@@ -12,374 +12,367 @@
 
 namespace dice {
 
-static const uint8_t STATUS_NOT_RECEIVED = 0;
-static const uint8_t STATUS_DECODING = 2;
-static const uint8_t STATUS_READY = 3;
-static const uint8_t STATUS_DISPLAYING = 4;
-static const uint8_t STATUS_EXPIRED = 5;
+// Enums for Media Status
+enum class MediaStatus : uint8_t {
+    NOT_RECEIVED = 0,
+    DECODING = 2,
+    READY = 3,
+    DISPLAYING = 4,
+    EXPIRED = 5
+};
 
-static const uint8_t MEDIA_TEXT = 0;
-static const uint8_t MEDIA_TEXTGROUP = 1;
-static const uint8_t MEDIA_IMAGE = 2;
-static const uint8_t MEDIA_OPTION = 3;
-static const uint8_t MEDIA_OPTION_BLOCKING = 4;
-static const uint8_t MEDIA_OPTION_END = 5;
-static const uint8_t MEDIA_BACKLIGHT_ON = 253;
-static const uint8_t MEDIA_BACKLIGHT_OFF = 254;
+// Enums for Media Types
+enum class MediaType : uint8_t {
+    TEXT = 0,
+    TEXTGROUP = 1,
+    IMAGE = 2,
+    OPTION = 3,
+    GIF = 5,
+    BACKLIGHT_CONTROL = 6
+};
 
-static const uint8_t IMG_480 = 0;
-static const uint8_t IMG_240 = 1;
+// Enums for Image Formats
+enum class ImageFormat : uint8_t {
+    JPEG = 1,
+    RGB565 = 2
+};
 
-static const size_t SCREEN_BUF_SIZE = 480*480;
+// Enums for Font IDs
+enum class FontID : uint8_t {
+    DEFAULT = 0,
+    ARIAL = 1,
+    TIMES_NEW_ROMAN = 2
+    // Add other font IDs as needed
+};
 
-
-
-
-
-
-
-
+// Screen Buffer Size
+constexpr size_t SCREEN_BUF_SIZE = 480 * 480;
 
 class MediaContainer {
 protected:
-  const uint8_t media_type;
-  uint8_t status;
-  std::mutex status_mtx;
-  size_t duration;
-  size_t start_time;
+    const MediaType media_type;
+    MediaStatus status;
+    std::mutex status_mtx;
+    size_t duration;
+    size_t start_time;
 
-  // Private API for setting status
-  void set_status(uint8_t new_status) {
-    status_mtx.lock();
-    status = new_status;
-    status_mtx.unlock();
-  }
-
+    void set_status(MediaStatus new_status) {
+        std::lock_guard<std::mutex> lock(status_mtx);
+        status = new_status;
+    }
 
 public:
-  MediaContainer(const uint8_t med_type, const size_t dur) 
-  : media_type(med_type)
-  , status(STATUS_NOT_RECEIVED)
-  , start_time(0)
-  , duration(dur)
-  {
-    if (duration>255) duration = 0;
-  }
-
-  ~MediaContainer() {}
-
-  uint8_t get_media_type() const {
-    return media_type;
-  }
-  // APIs for Options
-  virtual uint8_t get_status() {
-    bool expired = (start_time > 0 && (millis()-start_time) >= duration);
-    if (expired) {
-      set_status(STATUS_EXPIRED);
+    MediaContainer(MediaType med_type, size_t dur)
+        : media_type(med_type)
+        , status(MediaStatus::NOT_RECEIVED)
+        , duration(dur)
+        , start_time(0)
+    {
+        // Limit duration if necessary
     }
-    status_mtx.lock();
-    uint8_t tmp_status = status;
-    status_mtx.unlock();
-    return tmp_status;
-  }
 
-  virtual void trigger_display() {
-    if (start_time != 0) return;   // Only trigger once
-    set_status(STATUS_DISPLAYING);
-    start_time = max(millis(), (long unsigned int)1);
-    get_status();
-  }
+    virtual ~MediaContainer() {}
 
-  // APIs for Text
-  virtual const uint8_t* get_font() const {};
-  virtual uint16_t get_cursor_x() const {};
-  virtual uint16_t get_cursor_y() const {};
-  virtual String get_txt() const {};
+    MediaType get_media_type() const {
+        return media_type;
+    }
 
-  // APIs for Image
-  virtual void add_chunk(uint8_t* chunk, size_t chunk_size) {};
-  virtual void add_decoded(const uint16_t* img) {};
-  virtual uint16_t* get_img() {};
+    virtual MediaStatus get_status() {
+        bool expired = (start_time > 0 && (millis() - start_time) >= duration);
+        if (expired) {
+            set_status(MediaStatus::EXPIRED);
+        }
+        std::lock_guard<std::mutex> lock(status_mtx);
+        return status;
+    }
 
-  // APIs for TextGroup
-  virtual void add_member(MediaContainer* txt) {};
-  virtual MediaContainer* get_next() {};
-  virtual uint8_t get_color() const {};
-  virtual size_t size() const {};
+    virtual void trigger_display() {
+        if (start_time != 0) return;   // Only trigger once
+        set_status(MediaStatus::DISPLAYING);
+        start_time = max(millis(), (long unsigned int)1);
+        get_status();
+    }
 
-  // APIs for Animation
-  // None at the moment
+    // Virtual functions to be overridden by derived classes
 
-  
+    // APIs for Text
+    virtual const uint8_t* get_font() const { return nullptr; }
+    virtual uint16_t get_cursor_x() const { return 0; }
+    virtual uint16_t get_cursor_y() const { return 0; }
+    virtual String get_txt() const { return String(); }
+
+    // APIs for TextGroup
+    virtual void add_member(MediaContainer* txt) {}
+    virtual MediaContainer* get_next() { return nullptr; }
+    virtual size_t size() const { return 0; }
+    virtual uint16_t get_bg_color() const { return 0; }
+    virtual uint16_t get_font_color() const { return 0; }
+
+    // APIs for Image
+    virtual void add_chunk(uint16_t chunk_number, uint8_t* chunk, size_t chunk_size) {}
+    virtual uint16_t* get_img() { return nullptr; }
+    virtual uint8_t get_image_id() const { return 0; }
+    virtual ImageFormat get_image_format() const { return ImageFormat::JPEG; }
+    virtual uint16_t get_delay_time() const { return 0; }
+
+    // APIs for OptionGroup
+    virtual String get_option_text(uint8_t id) const { return String(); }
+    virtual uint8_t get_selected_index() const { return 0; }
+    virtual void set_selected_index(uint8_t idx) {}
+    virtual void add_option(String option_text) {}
 };
-
-
-
-
-
-
 
 class Text : public MediaContainer {
 private:
-  String content;
-  const uint8_t* font;
-  const uint16_t cursor_x, cursor_y;
-  uint8_t init_mode;
-
-public: 
-  Text(String input
-        , const size_t duration=0
-        , const uint8_t* ft=u8g2_font_unifont_tf
-        , const uint16_t cx=40
-        , const uint16_t cy=40)
-    : MediaContainer(MEDIA_TEXT, duration)
-    , content(input)
-    , font(ft)
-    , cursor_x(cx)
-    , cursor_y(cy) 
-    {set_status(STATUS_READY);}
-
-  Text(char* input
-        , const size_t duration=0
-        , const uint8_t* ft=u8g2_font_unifont_tf
-        , const uint16_t cx=40
-        , const uint16_t cy=40)
-    : MediaContainer(MEDIA_TEXT, duration)
-    , content(String(input))
-    , font(ft)
-    , cursor_x(cx)
-    , cursor_y(cy)
-    {set_status(STATUS_READY);}
-
-  // APIs for Text
-  virtual const uint8_t* get_font() const {
-    return font;
-  }
-  virtual uint16_t get_cursor_x() const {
-    return cursor_x;
-  }
-  virtual uint16_t get_cursor_y() const {
-    return cursor_y;
-  }
-  virtual String get_txt() const {
-    return content;
-  }
-};
-
-
-
-
-
-
-
-
-class Image : public MediaContainer {
-private:
-  uint8_t* content;
-  const size_t content_len;
-  uint8_t* input_ptr;
-
-  const uint8_t resolution;
-
-  // Decoding parameters
-  uint16_t* decoded_content;
-  uint16_t* decode_input_ptr;
-  TaskHandle_t decodeTaskHandle;
-
-  JPEGDEC jpeg;
-  std::mutex decode_mtx; // Mutex for thread-safe access
-
-  size_t received_len() {return input_ptr - content;}
-  
-  // JPEGDraw callback function to handle drawing decoded JPEG blocks
-  static int JPEGDraw(JPEGDRAW *pDraw) {
-    Image *img = static_cast<Image*>(pDraw->pUser);
-    img->decode_mtx.lock();
-    uint16_t* destination = img->decoded_content + (pDraw->y * 480 + pDraw->x);
-    memcpy(destination, pDraw->pPixels, pDraw->iWidth * pDraw->iHeight * sizeof(uint16_t));
-    img->decode_mtx.unlock();
-    return 1; // continue decode
-  }
-
-  static void decodeTask(void* pvParameters) {
-    Image* img = static_cast<Image*>(pvParameters);
-    img->decode();
-    vTaskDelete(nullptr); // Delete task after completion
-  }
-
-  void decode() {
-    jpeg.setPixelType(RGB565_BIG_ENDIAN); // Set pixel type if JPEG library supports it, adjust as necessary
-    if (jpeg.openRAM(content, content_len, JPEGDraw)) {
-      // jpeg.setDrawCallback(JPEGDraw); // Set the draw callback
-      // jpeg.setUser(this); // Set user pointer to current instance for draw callback
-      if (jpeg.decode(0, 0, 0)) { // Decode at full scale
-        if (resolution == IMG_240) upscale_2x();   // Upscale if decoded as 240x240 img
-        set_status(STATUS_READY);
-      }
-      jpeg.close();
-      delete[] content;     // When decoded, delete original content as it is no longer needed.
-      content = nullptr;
-    }
-  }
-
-  void upscale_2x() {
-    for (uint16_t y=239;y>=0; y--) {
-      for (uint16_t x=239; x>= 0; x--) {
-        const uint16_t pxl = decoded_content[y*240 + x];
-        decoded_content[2*y*480 + 2*x] = pxl;
-        decoded_content[2*y*480 + 2*x + 1] = pxl;
-        decoded_content[(2*y+1)*480 + 2*x] = pxl;
-        decoded_content[(2*y+1)*480 + 2*x + 1] = pxl;
-      }
-    }
-  }
-
-  void startDecode() {
-    set_status(STATUS_DECODING);
-    xTaskCreatePinnedToCore(decodeTask, "DecodeTask", 8192, this, 1, &decodeTaskHandle, 0); // 0 for Core 0, 1 for Core 1
-  }
+    String content;
+    FontID font_id;
+    uint16_t cursor_x;
+    uint16_t cursor_y;
 
 public:
-  Image(const size_t raw_len, uint8_t res, const size_t duration)
-    : MediaContainer(MEDIA_IMAGE, duration)
-    , content((uint8_t*) ps_malloc(raw_len))
-    , content_len(raw_len)
-    , input_ptr(content)
-    , resolution(res)
-    , decoded_content((uint16_t*) ps_malloc(480 * 480 * sizeof(uint16_t)))
-    , decode_input_ptr(decoded_content)
-    , decodeTaskHandle(nullptr)
-    {}
-
-  ~Image() {
-    free(content);
-    free(decoded_content);
-  }
-
-  
-  virtual uint16_t* get_img() {
-    Serial.println("Getting Image");
-    if (!get_status() >= STATUS_READY) {
-      Serial.println("Content Not Ready Yet!");
-      assert(false);
+    Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy)
+        : MediaContainer(MediaType::TEXT, duration)
+        , content(input)
+        , font_id(ft_id)
+        , cursor_x(cx)
+        , cursor_y(cy)
+    {
+        set_status(MediaStatus::READY);
     }
-    Serial.println("Content decoded,returning");
-    return decoded_content;
-  }
 
-  virtual void add_chunk(uint8_t* chunk, size_t chunk_size) {
-    if (input_ptr + chunk_size > content + content_len) 
-      return;
-    memcpy(input_ptr, chunk, chunk_size);
-    input_ptr += chunk_size;
-
-    if (received_len() == content_len) startDecode();
-  }
-
-  virtual void add_decoded(const uint16_t* img) {
-    memcpy(decoded_content, img, SCREEN_BUF_SIZE * sizeof(uint16_t));
-    uint16_t* decode_input_ptr;
-    set_status(STATUS_READY);
-    Serial.print("Status: ");
-    Serial.println(status);
-  }
+    // APIs for Text
+    virtual const uint8_t* get_font() const {
+        return map_font(font_id);
+    }
+    virtual uint16_t get_cursor_x() const {
+        return cursor_x;
+    }
+    virtual uint16_t get_cursor_y() const {
+        return cursor_y;
+    }
+    virtual String get_txt() const {
+        return content;
+    }
+    virtual FontID get_font_id() const {
+        return font_id;
+    }
 };
-
-const uint8_t* map_font(uint8_t key) {
-  switch (key) {
-    case 2: 
-      return u8g2_font_unifont_t_arabic;
-    case 3:
-      return u8g2_font_unifont_t_chinese;
-    case 4:
-      return u8g2_font_cu12_t_cyrillic;
-    case 5:
-      return u8g2_font_unifont_t_devanagari;
-    default:
-      return u8g2_font_unifont_tf;
-  }
-}
-
-
-
-
-
-
-
-
-
 
 class TextGroup : public MediaContainer {
 private:
-  std::vector<MediaContainer*> vec;
-  size_t next_idx;
-  const uint8_t color;
+    std::vector<MediaContainer*> vec;
+    size_t next_idx;
+    uint16_t bg_color;
+    uint16_t font_color;
 
 public:
-  TextGroup(const size_t dur, const uint8_t col) 
-  : MediaContainer(MEDIA_TEXTGROUP, duration)
-  , next_idx(0)
-  , color(col)
-  {
-    set_status(STATUS_READY);
-  }
-
-  virtual void add_member(MediaContainer* txt) {
-    vec.push_back(txt);
-  }
-
-  virtual size_t size() const {
-    return vec.size();
-  }
-
-  virtual MediaContainer* get_next() {
-    if (vec.empty() || vec.size() == next_idx) {
-      return nullptr;
+    TextGroup(size_t dur, uint16_t bg_col, uint16_t font_col)
+        : MediaContainer(MediaType::TEXTGROUP, dur)
+        , next_idx(0)
+        , bg_color(bg_col)
+        , font_color(font_col)
+    {
+        set_status(MediaStatus::READY);
     }
-    return vec[next_idx++];
-  }
 
-  virtual uint8_t get_color() const {
-    return color;
-  }
+    virtual ~TextGroup() {
+        for (auto txt : vec) {
+            delete txt;
+        }
+    }
+
+    virtual void add_member(MediaContainer* txt) {
+        vec.push_back(txt);
+    }
+
+    virtual size_t size() const {
+        return vec.size();
+    }
+
+    virtual MediaContainer* get_next() {
+        if (vec.empty() || next_idx >= vec.size()) {
+            return nullptr;
+        }
+        return vec[next_idx++];
+    }
+
+    virtual uint16_t get_bg_color() const {
+        return bg_color;
+    }
+
+    virtual uint16_t get_font_color() const {
+        return font_color;
+    }
 };
 
+class Image : public MediaContainer {
+private:
+    uint8_t image_id;
+    ImageFormat image_format;
+    uint32_t total_size;
+    uint16_t delay_time;
 
+    uint8_t* content;
+    size_t content_len;
+    uint8_t* input_ptr;
 
+    uint16_t* decoded_content;
+    TaskHandle_t decodeTaskHandle;
+    JPEGDEC jpeg;
+    std::mutex decode_mtx;
 
+    size_t received_len() { return input_ptr - content; }
 
+    static int JPEGDraw(JPEGDRAW *pDraw) {
+        Image *img = static_cast<Image*>(pDraw->pUser);
+        img->decode_mtx.lock();
+        uint16_t* destination = img->decoded_content + (pDraw->y * 480 + pDraw->x);
+        memcpy(destination, pDraw->pPixels, pDraw->iWidth * pDraw->iHeight * sizeof(uint16_t));
+        img->decode_mtx.unlock();
+        return 1; // continue decode
+    }
 
+    static void decodeTask(void* pvParameters) {
+        Image* img = static_cast<Image*>(pvParameters);
+        img->decode();
+        vTaskDelete(nullptr); // Delete task after completion
+    }
 
+    void decode() {
+        jpeg.setPixelType(RGB565_BIG_ENDIAN); // Adjust as necessary
+        if (jpeg.openRAM(content, content_len, JPEGDraw)) {
+            jpeg.setUserPointer(this);
+            if (jpeg.decode(0, 0, 0)) { // Decode at full scale
+                set_status(MediaStatus::READY);
+            }
+            jpeg.close();
+            free(content); // Free original content as it's no longer needed
+            content = nullptr;
+        } else {
+            set_status(MediaStatus::EXPIRED); // Handle error appropriately
+        }
+    }
 
+    void startDecode() {
+        set_status(MediaStatus::DECODING);
+        xTaskCreatePinnedToCore(decodeTask, "DecodeTask", 8192, this, 1, &decodeTaskHandle, 0);
+    }
 
+public:
+    Image(uint8_t img_id, ImageFormat format, uint32_t total_img_size, uint16_t delay, size_t duration)
+        : MediaContainer(MediaType::IMAGE, duration)
+        , image_id(img_id)
+        , image_format(format)
+        , total_size(total_img_size)
+        , delay_time(delay)
+        , content((uint8_t*)ps_malloc(total_img_size))
+        , content_len(total_img_size)
+        , input_ptr(content)
+        , decoded_content((uint16_t*)ps_malloc(SCREEN_BUF_SIZE * sizeof(uint16_t)))
+        , decodeTaskHandle(nullptr)
+    {
+        if (content == nullptr || decoded_content == nullptr) {
+            // Handle memory allocation failure
+            set_status(MediaStatus::EXPIRED);
+        }
+    }
 
+    virtual ~Image() {
+        free(content);
+        free(decoded_content);
+    }
 
+    virtual uint16_t* get_img() {
+        if (get_status() < MediaStatus::READY) {
+            return nullptr;
+        }
+        return decoded_content;
+    }
 
+    virtual void add_chunk(uint16_t chunk_number, uint8_t* chunk, size_t chunk_size) {
+        if (input_ptr + chunk_size > content + content_len) {
+            // Handle overflow
+            return;
+        }
+        memcpy(input_ptr, chunk, chunk_size);
+        input_ptr += chunk_size;
+
+        if (received_len() == content_len) {
+            if (image_format == ImageFormat::JPEG) {
+                startDecode();
+            } else if (image_format == ImageFormat::RGB565) {
+                // For RGB565 bitmap, no decoding needed
+                memcpy(decoded_content, content, content_len);
+                free(content);
+                content = nullptr;
+                set_status(MediaStatus::READY);
+            }
+        }
+    }
+
+    virtual uint8_t get_image_id() const {
+        return image_id;
+    }
+
+    virtual ImageFormat get_image_format() const {
+        return image_format;
+    }
+
+    virtual uint16_t get_delay_time() const {
+        return delay_time;
+    }
+};
+
+// Map font IDs to font pointers
+const uint8_t* map_font(FontID font_id) {
+    switch (font_id) {
+        case FontID::DEFAULT:
+            return u8g2_font_unifont_tf;
+        case FontID::ARIAL:
+            return u8g2_font_helvB14_tf; // Example font
+        case FontID::TIMES_NEW_ROMAN:
+            return u8g2_font_timB14_tf; // Example font
+        // Add cases for other font IDs
+        default:
+            return u8g2_font_unifont_tf;
+    }
+}
 
 class OptionGroup : public MediaContainer {
 private:
-  std::vector<MediaContainer*> vec;
-  const uint8_t selecting;
+    std::vector<String> options;
+    uint8_t selected_index;
 
 public:
-  OptionGroup(const uint8_t sel) 
-    : MediaContainer(MEDIA_TEXTGROUP, 0)
-    , selecting(sel)
-  {
-    set_status(STATUS_READY);
-  }
+    OptionGroup(uint8_t selected_idx)
+        : MediaContainer(MediaType::OPTION, 0)
+        , selected_index(selected_idx)
+    {
+        set_status(MediaStatus::READY);
+    }
 
-  virtual void add_member(MediaContainer* txt)  {
-    if (vec.size() >= 3) return;
-    vec.push_back(txt);
-  }
-  virtual MediaContainer* get_option(uint8_t id) const {
-    if (id > vec.size()) return nullptr;
-    return vec[id];
-  }
-  virtual uint8_t get_selected_id() const {
-    return selecting;
-  }
+    virtual void add_option(String option_text) {
+        options.push_back(option_text);
+    }
+
+    virtual size_t size() const {
+        return options.size();
+    }
+
+    virtual String get_option_text(uint8_t id) const {
+        if (id >= options.size()) return String();
+        return options[id];
+    }
+
+    virtual uint8_t get_selected_index() const {
+        return selected_index;
+    }
+
+    virtual void set_selected_index(uint8_t idx) {
+        if (idx < options.size()) {
+            selected_index = idx;
+        }
+    }
 };
 
 } // namespace dice
