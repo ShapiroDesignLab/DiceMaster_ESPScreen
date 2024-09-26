@@ -8,9 +8,9 @@ SPIDriver* spid;
 
 void setup(void)
 {
-  // Init serial
-  Serial.begin(115200);
-  Serial.println("Beginning");
+  // // Init serial
+  // Serial.begin(115200);
+  // Serial.println("Beginning");
 
   // Check PSRAM Init Status
   if (psramInit()) Serial.println("\nPSRAM correctly initialized");

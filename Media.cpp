@@ -3,18 +3,16 @@
 namespace dice {
 
 void MediaContainer::set_status(MediaStatus new_status) {
-        std::lock_guard<std::mutex> lock(status_mtx);
-        status = new_status;
-    }
+    std::lock_guard<std::mutex> lock(status_mtx);
+    status = new_status;
+}
 
 MediaContainer::MediaContainer(MediaType med_type, size_t dur)
-      : media_type(med_type)
-      , status(MediaStatus::NOT_RECEIVED)
-      , duration(dur)
-      , start_time(0)
-  {
-      // Limit duration if necessary
-  }
+    : media_type(med_type)
+    , status(MediaStatus::NOT_RECEIVED)
+    , duration(dur)
+    , start_time(0) 
+    {}
 
 MediaContainer::~MediaContainer() {}
 
@@ -34,20 +32,28 @@ MediaStatus MediaContainer::get_status() {
 void MediaContainer::trigger_display() {
     if (start_time != 0) return;   // Only trigger once
     set_status(MediaStatus::DISPLAYING);
-    start_time = max(millis(), (long unsigned int)1);
+    start_time = max(millis(), (long unsigned int) 1);
     get_status();
 }
 
 
 Text::Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy)
-      : MediaContainer(MediaType::TEXT, duration)
-      , content(input)
-      , font_id(ft_id)
-      , cursor_x(cx)
-      , cursor_y(cy)
-  {
-      set_status(MediaStatus::READY);
-  }
+    : MediaContainer(MediaType::TEXT, duration)
+    , content(input)
+    , font_id(ft_id)
+    , cursor_x(cx)
+    , cursor_y(cy) {
+    set_status(MediaStatus::READY);
+}
+
+Text::Text(char& input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy)
+    : MediaContainer(MediaType::TEXT, duration)
+    , content(String(input))
+    , font_id(ft_id)
+    , cursor_x(cx)
+    , cursor_y(cy) {
+    set_status(MediaStatus::READY);
+}
 
 // APIs for Text
 const uint8_t* Text::get_font() const {
@@ -66,13 +72,30 @@ FontID Text::get_font_id() const {
     return font_id;
 }
 
+// Map font IDs to font pointers
+const uint8_t* Text::map_font(FontID font_id) {
+    switch (font_id) {
+    case FontID::TF:
+        return u8g2_font_unifont_tf;
+    case FontID::ARABIC:
+        return u8g2_font_unifont_t_arabic;
+    case FontID::CHINESE:
+        return u8g2_font_unifont_t_chinese;
+    case FontID::CYRILLIC:
+        return u8g2_font_cu12_t_cyrillic;
+    case FontID::DEVANAGARI:
+        return u8g2_font_unifont_t_devanagari;
+    default:
+        return u8g2_font_unifont_tf;
+    }
+}
+
 
 TextGroup::TextGroup(size_t dur, uint16_t bg_col, uint16_t font_col)
-        : MediaContainer(MediaType::TEXTGROUP, dur)
-        , next_idx(0)
-        , bg_color(bg_col)
-        , font_color(font_col)
-{
+    : MediaContainer(MediaType::TEXTGROUP, dur)
+    , next_idx(0)
+    , bg_color(bg_col)
+    , font_color(font_col) {
     set_status(MediaStatus::READY);
 }
 
@@ -107,36 +130,48 @@ uint16_t TextGroup::get_font_color() const {
 
 
 size_t Image::received_len() {
-  return input_ptr - content;
+    return input_ptr - content;
 }
 
-int Image::JPEGDraw(JPEGDRAW *pDraw) {
-    Image *img = static_cast<Image*>(pDraw->pUser);
+int Image::JPEGDraw(JPEGDRAW* pDraw) {
+    Image* img = static_cast<Image*>(pDraw->pUser);
     img->decode_mtx.lock();
     uint16_t* destination = img->decoded_content + (pDraw->y * 480 + pDraw->x);
     memcpy(destination, pDraw->pPixels, pDraw->iWidth * pDraw->iHeight * sizeof(uint16_t));
     img->decode_mtx.unlock();
-    return 1; // continue decode
+    return 1;   // continue decode
 }
 
 static void Image::decodeTask(void* pvParameters) {
     Image* img = static_cast<Image*>(pvParameters);
     img->decode();
-    vTaskDelete(nullptr); // Delete task after completion
+    vTaskDelete(nullptr);   // Delete task after completion
 }
 
 void Image::decode() {
-    jpeg.setPixelType(RGB565_BIG_ENDIAN); // Adjust as necessary
+    jpeg.setPixelType(RGB565_BIG_ENDIAN);   // Adjust as necessary
     if (jpeg.openRAM(content, content_len, JPEGDraw)) {
         jpeg.setUserPointer(this);
-        if (jpeg.decode(0, 0, 0)) { // Decode at full scale
+        if (jpeg.decode(0, 0, 0)) {   // Decode at full scale
             set_status(MediaStatus::READY);
         }
         jpeg.close();
-        free(content); // Free original content as it's no longer needed
+        free(content);   // Free original content as it's no longer needed
         content = nullptr;
     } else {
-        set_status(MediaStatus::EXPIRED); // Handle error appropriately
+        set_status(MediaStatus::EXPIRED);   // Handle error appropriately
+    }
+}
+
+void Image::upscale_2x() {
+    for (uint16_t y = 239; y >= 0; y--) {
+        for (uint16_t x = 239; x >= 0; x--) {
+            const uint16_t pxl = decoded_content[y * 240 + x];
+            decoded_content[2 * y * 480 + 2 * x] = pxl;
+            decoded_content[2 * y * 480 + 2 * x + 1] = pxl;
+            decoded_content[(2 * y + 1) * 480 + 2 * x] = pxl;
+            decoded_content[(2 * y + 1) * 480 + 2 * x + 1] = pxl;
+        }
     }
 }
 
@@ -151,16 +186,15 @@ Image::Image(uint8_t img_id, ImageFormat format, uint32_t total_img_size, size_t
     , image_id(img_id)
     , image_format(format)
     , total_size(total_img_size)
-    , content((uint8_t*)ps_malloc(total_img_size))
+    , content((uint8_t*) ps_malloc(total_img_size))
     , content_len(total_img_size)
     , input_ptr(content)
-    , decoded_content((uint16_t*)ps_malloc(SCREEN_BUF_SIZE * sizeof(uint16_t)))
-    , decodeTaskHandle(nullptr)
-{
-  if (content == nullptr || decoded_content == nullptr) {
-      // Handle memory allocation failure
-      set_status(MediaStatus::EXPIRED);
-  }
+    , decoded_content((uint16_t*) ps_malloc(SCREEN_PXLCNT * sizeof(uint16_t)))
+    , decodeTaskHandle(nullptr) {
+    if (content == nullptr || decoded_content == nullptr) {
+        // Handle memory allocation failure
+        set_status(MediaStatus::EXPIRED);
+    }
 }
 
 Image::~Image() {
@@ -177,7 +211,6 @@ uint16_t* Image::get_img() {
 
 void Image::add_chunk(uint16_t chunk_number, uint8_t* chunk, size_t chunk_size) {
     if (input_ptr + chunk_size > content + content_len) {
-        // Handle overflow
         return;
     }
     memcpy(input_ptr, chunk, chunk_size);
@@ -186,13 +219,17 @@ void Image::add_chunk(uint16_t chunk_number, uint8_t* chunk, size_t chunk_size) 
     if (received_len() == content_len) {
         if (image_format == ImageFormat::JPEG480 || image_format == ImageFormat::JPEG240) {
             startDecode();
-        } else if (image_format == ImageFormat::BMP480 || image_format == ImageFormat::BMP240) {
+        } else if (image_format == ImageFormat::BMP480) {
             // For RGB565 bitmap, no decoding needed
             memcpy(decoded_content, content, content_len);
-            free(content);
-            content = nullptr;
-            set_status(MediaStatus::READY);
         }
+        else if (image_format == ImageFormat::BMP240) {
+            memcpy(decoded_content, content, content_len);
+            upscale_2x();
+        }
+        free(content);
+        content = nullptr;
+        set_status(MediaStatus::READY);
     }
 }
 
@@ -204,11 +241,13 @@ ImageFormat Image::get_image_format() const {
     return image_format;
 }
 
+void Image::add_decoded(const uint16_t* img) { 
+    add_chunk(0, img, SCREEN_PXLCNT * sizeof(uint16_t)) 
+}
 
 OptionGroup::OptionGroup(uint8_t selected_idx)
     : MediaContainer(MediaType::OPTION, 0)
-    , selected_index(selected_idx)
-{
+    , selected_index(selected_idx) {
     set_status(MediaStatus::READY);
 }
 
@@ -220,9 +259,17 @@ size_t OptionGroup::size() const {
     return options.size();
 }
 
-String OptionGroup::get_option_text(uint8_t id) const {
-    if (id >= options.size()) return String();
-    return options[id];
+vector<String> OptionGroup::get_option_text(uint8_t select_id) const {
+    if (options.size() <= 1) {
+        return options;
+    }
+    if (select_id == 0) {
+        return vector<String>(String(), options[0], options[1]);
+    }
+    if (select_id == options.size()-1) {
+        return vector<String>(options[select_id-1], options[select_id], String());
+    }
+    return vector<String>(options[select_id-1], options[select_id], options[select_id+1]);
 }
 
 uint8_t OptionGroup::get_selected_index() const {
@@ -235,4 +282,12 @@ void OptionGroup::set_selected_index(uint8_t idx) {
     }
 }
 
-}
+// void OptionUpdate::OptionUpdate(const uint8_t new_id) 
+//     : selecting_id(new_id)
+//     {}
+
+// virtual uint8_t OptionUpdate::get_selected_index() const {
+//     return selecting_id;
+// }
+
+}   // namespace dice

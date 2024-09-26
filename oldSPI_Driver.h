@@ -11,33 +11,43 @@
 
 namespace dice {
 
-enum CMD {
-  PING = 1;
-  NEW_IMG = 3;
-  TEXT = 31;
-  OPTIONS = 63;
-  BACKLIGHT = 254;
-}
+// SPI Buffer Sizes
+constexpr size_t SPI_MOSI_BUFFER_SIZE = 2048;  // Adjust as needed
+constexpr size_t SPI_MISO_BUFFER_SIZE = 256;   // For ACK/NACK messages
+constexpr size_t QUEUE_SIZE = 1;
 
-enum METADATA {
-  IMG_HEADER_LEN = 4;
-  TEXTGROUP_HEADER_LEN = 4;
-  TEXT_CHUNK_HEADER_LEN = 6;
-  OPTION_HEADER_LEN = 2;
-  OPTION_CHUNK_HEADER_LEN = 5
-}
+// Enums for Message Types
+enum class MessageType : uint8_t {
+    TEXT_BATCH = 0x01,
+    IMAGE_TRANSFER_START = 0x02,
+    IMAGE_CHUNK = 0x03,
+    IMAGE_TRANSFER_END = 0x04,
+    OPTION_LIST = 0x05,
+    OPTION_SELECTION_UPDATE = 0x06,
+    GIF_TRANSFER_START = 0x07,
+    GIF_FRAME = 0x08,
+    GIF_TRANSFER_END = 0x09,
+    BACKLIGHT_CONTROL = 0x0A,
+    ACK = 0x0B,
+    ERROR = 0x0C
+};
 
-static const size_t SPI_MOSI_BUFFER_SIZE = 1024;  // 2k buffer
-static const size_t SPI_MISO_BUFFER_SIZE = 1024;    // probably not using for now
-static const size_t QUEUE_SIZE = 1;
+// Enums for Error Codes
+enum class ErrorCode : uint8_t {
+    SUCCESS = 0x00,
+    UNKNOWN_MSG_TYPE = 0x01,
+    INVALID_FORMAT = 0x02,
+    CHECKSUM_ERROR = 0x03,
+    IMAGE_ID_MISMATCH = 0x04,
+    PAYLOAD_LENGTH_MISMATCH = 0x05,
+    UNSUPPORTED_IMAGE_FORMAT = 0x06,
+    OUT_OF_MEMORY = 0x07,
+    INTERNAL_ERROR = 0x08,
+    INVALID_OPTION_INDEX = 0x09
+};
 
-// static const uint8_t CMD_PING = 1;
-// static const uint8_t CMD_NEW_IMG = 3;
-// static const uint8_t CMD_TEXT = 31;
-// static const uint8_t CMD_OPTIONS = 63;
-// static const uint8_t CMD_OPTIONS_END = 64;
-// static const uint8_t CMD_BACKLIGHT_ON = 253;
-// static const uint8_t CMD_BACKLIGHT_OFF = 254;
+// SPI Protocol constants
+constexpr uint8_t SOF_MARKER = 0x7E;
 
 // // Image Header info
 // static const uint8_t IMG_HEADER_LEN = 4;            // CMD, nChunks, resolution, enforced time
@@ -59,9 +69,11 @@ private:
   // Variables for context management
   uint8_t expecting_bufs;
   MediaContainer* expecting_container;
+  std::map<uint8_t, MediaContainer*> ongoing_transfers;
 
-  // Pinging message
-  size_t last_ping_time;
+  // Acknowledgment and Error Handling
+  void send_ack(uint8_t message_id, ErrorCode status_code);
+  void send_error(uint8_t message_id, ErrorCode error_code, const std::string& error_msg);
 
   MediaContainer* pop_expect() {
     MediaContainer* rtn = expecting_container;
