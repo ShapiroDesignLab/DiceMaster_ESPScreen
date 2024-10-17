@@ -83,7 +83,7 @@ TextGroup::TextGroup(size_t dur, uint16_t bg_col, uint16_t font_col)
 
 TextGroup::~TextGroup() {
     for (auto txt : vec) {
-        delete txt;
+      delete txt;
     }
 }
 
@@ -176,7 +176,9 @@ Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t t
 
 Image::~Image() {
     free(content);
+    content = nullptr;
     free(decoded_content);
+    decoded_content = nullptr;
 }
 
 uint16_t* Image::get_img() {
@@ -270,5 +272,26 @@ void Image::add_decoded(const uint16_t* img) {
 // virtual uint8_t OptionUpdate::get_selected_index() const {
 //     return selecting_id;
 // }
+
+// Demo Functions
+MediaContainer* get_demo_textgroup() {
+    TextGroup* group = new TextGroup(0, DARKGREY, WHITE);
+    group->add_member(new Text("Psíquico", 0, FontID::TF, 40, 40));
+    group->add_member(new Text("Hellseher", 0, FontID::TF, 280, 40));
+    group->add_member(new Text("экстрасенс", 0, FontID::CYRILLIC, 40, 160));
+    group->add_member(new Text("Psychique", 0, FontID::TF, 280, 160));
+    group->add_member(new Text("Psychic", 0, FontID::TF, 40, 280));
+    group->add_member(new Text("मानसिक", 0, FontID::DEVANAGARI, 280, 280));
+    group->add_member(new Text("靈媒", 0, FontID::CHINESE, 40, 400));
+    group->add_member(new Text("نفسية", 0, FontID::ARABIC, 280, 400));
+    return group;
+}
+
+MediaContainer* show_debug_info(String input) {
+    TextGroup* group = new TextGroup(0, DARKGREY, WHITE);
+    group->add_member(new Text("DEBUG Info:", 0, FontID::TF, 40, 40));
+    group->add_member(new Text(input, 0, FontID::TF, 40, 160));
+    return group;
+}
 
 }   // namespace dice

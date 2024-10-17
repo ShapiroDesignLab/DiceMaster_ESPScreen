@@ -2,6 +2,12 @@
 
 namespace dice {
 
+void printHeapStatus() {
+    size_t freeHeap = ESP.getFreeHeap();
+    String heapInfo = "Free Heap: " + String(ESP.getFreePsram()) + " bytes";
+    Serial.println(heapInfo);
+}
+
 bool Screen::is_next_ready() {
     if (display_queue.empty()) {
         return false;
@@ -67,9 +73,7 @@ void Screen::display_next() {
     if (display_queue.empty()) {
         return;
     }
-    if (current_disp != nullptr) {
-        delete current_disp;
-    }
+    delete current_disp;
 
     current_disp = display_queue.front();
     display_queue.pop_front();
@@ -160,6 +164,7 @@ void Screen::update() {
     }
     if (current_disp == nullptr || current_disp->get_status() >= MediaStatus::EXPIRED) {
         display_next();
+        return;
     }
     Serial.println("Not printing due to previous not expiring");
 }
@@ -187,18 +192,4 @@ void Screen::draw_startup_logo() {
     enqueue(med);
 }
 
-
-// Demo Functions
-MediaContainer* get_demo_textgroup() {
-    TextGroup* group = new TextGroup(0, DARKGREY, WHITE);
-    group->add_member(new Text("Psíquico", 0, FontID::TF, 40, 40));
-    group->add_member(new Text("Hellseher", 0, FontID::TF, 280, 40));
-    group->add_member(new Text("экстрасенс", 0, FontID::CYRILLIC, 40, 160));
-    group->add_member(new Text("Psychique", 0, FontID::TF, 280, 160));
-    group->add_member(new Text("Psychic", 0, FontID::TF, 40, 280));
-    group->add_member(new Text("मानसिक", 0, FontID::DEVANAGARI, 280, 280));
-    group->add_member(new Text("靈媒", 0, FontID::CHINESE, 40, 400));
-    group->add_member(new Text("نفسية", 0, FontID::ARABIC, 280, 400));
-    return group;
-}
 }   // namespace dice

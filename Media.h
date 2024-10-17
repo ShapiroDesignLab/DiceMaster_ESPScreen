@@ -45,7 +45,7 @@ protected:
 
 public:
     MediaContainer(const MediaType med_type, const size_t dur);
-    ~MediaContainer();
+    virtual ~MediaContainer();
 
     MediaType get_media_type() const;
 
@@ -120,7 +120,7 @@ private:
 
 public:
     Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration);
-    ~Image();
+    virtual ~Image();
 
     virtual uint16_t* get_img();
     virtual void add_chunk(const uint8_t* chunk, size_t chunk_size);
@@ -140,6 +140,7 @@ private:
 public:
     Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy);
     Text(char* input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy);
+    virtual ~Text() {}
 
     // APIs for Text
     virtual const uint8_t* get_font() const;
@@ -178,7 +179,7 @@ private:
 
 public:
     TextGroup(const size_t dur, const uint16_t bg_col, const uint16_t font_col);
-    ~TextGroup();
+    virtual ~TextGroup();
 
     virtual void add_member(MediaContainer* txt);
     virtual size_t size() const;
@@ -212,6 +213,9 @@ public:
 //     OptionUpdate(const uint8_t new_id);
 //     virtual uint8_t get_selected_index() const;
 // };
+
+MediaContainer* get_demo_textgroup();
+MediaContainer* show_debug_info(String input);
 
 }   // namespace dice
 
