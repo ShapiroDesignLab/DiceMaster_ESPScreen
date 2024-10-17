@@ -5,12 +5,9 @@
 #include <string>
 #include <vector>
 
+#include <U8g2lib.h>
 #include <Arduino_GFX_Library.h>
 #include <JPEGDEC.h>
-#include <U8g2lib.h>
-
-#include "oldScreen_Driver.h"
-
 
 namespace dice {
 
@@ -21,14 +18,17 @@ enum class MediaStatus : uint8_t { NOT_RECEIVED = 0, DECODING = 2, READY = 3, DI
 enum class MediaType : uint8_t { TEXT = 0, TEXTGROUP = 1, IMAGE = 2, OPTION = 3, GIF = 5, CTLR = 255 };
 
 // Enums for Image Formats
-enum class ImageFormat : uint8_t { NOIMG = 0, JPEG480 = 1, JPEG240 = 2, BMP480 = 3, BMP240 = 4 };
+enum class ImageFormat : uint8_t { NOIMG = 0, JPEG=1, RGB565=2, RGB222=3};
+
+enum class ImageResolution: uint8_t {SQ480=1, SQ240=2};
 
 // Enums for Font IDs
-enum class FontID : uint8_t { NOTEXT = 0, TF = 1, ARABIC = 2, CHINESE = 3, CYRILLIC = 4, DEVANAGARI = 5 };
+enum class FontID : uint8_t { NOTEXT=0, TF = 1, ARABIC=2, CHINESE=3, CYRILLIC=4, DEVANAGARI=5};
 
-enum class PrettyColor : uint32_t { DARKGREY = 0x636363, BABYBLUE = 0xbee3f5, BLACK = 0x000000, WHITE = 0xffffff };
+// enum class PrettyColor : uint32_t { DARKGREY = 0x636363, BABYBLUE = 0xbee3f5, BLACK = 0x000000, WHITE = 0xffffff };
 
-enum class Command : uint8_t {BACKLIGHT_OFF =1, BACKLIGHT_ON=2, OPTION_ID=3, }
+// enum class Command : uint8_t {BACKLIGHT_OFF =1, BACKLIGHT_ON=2, OPTION_ID=3, };
+
 // Screen Buffer Size
 constexpr size_t SCREEN_PXLCNT = 480 * 480;
 
@@ -55,28 +55,32 @@ public:
     virtual void trigger_display();
 
     // APIs for Text
-    virtual const uint8_t* get_font() const = 0;
-    virtual uint16_t get_cursor_x() const = 0;
-    virtual uint16_t get_cursor_y() const = 0;
-    virtual String get_txt() const = 0;
+    virtual const uint8_t* get_font() const {return 0;}
+    virtual uint16_t get_cursor_x() const {return 0;}
+    virtual uint16_t get_cursor_y() const {return 0;}
+    virtual String get_txt() const {return String();}
 
     // APIs for Image
-    virtual void add_chunk(uint8_t* chunk, size_t chunk_size) = 0;
-    virtual void add_decoded(const uint16_t* img) = 0;
-    virtual uint16_t* get_img() = 0;
+    virtual void add_chunk(const uint8_t* chunk, size_t chunk_size) {return;}
+    virtual void add_decoded(const uint16_t* img) {return;}
+    virtual uint16_t* get_img() {return nullptr;}
+    virtual uint8_t get_image_id() {return 0;}
+    virtual ImageResolution get_image_resolution() {return ImageResolution::SQ480;}
 
     // APIs for TextGroup
-    virtual void add_member(MediaContainer* txt) = 0;
-    virtual MediaContainer* get_next() = 0;
-    virtual size_t size() const = 0;
-    virtual uint16_t get_bg_color() const = 0;
-    virtual uint16_t get_font_color() const = 0;
+    virtual void add_member(MediaContainer* txt) {return;}
+    virtual MediaContainer* get_next() {return nullptr;}
+    virtual size_t size() const {return 0;}
+    virtual uint16_t get_bg_color() const {return 0;}
+    virtual uint16_t get_font_color() const {return 0;}
+    virtual FontID get_font_id() const {return FontID::NOTEXT;}
 
     // APIs for OptionGroup
-    virtual String get_option_text(uint8_t id) const = 0;
-    virtual uint8_t get_selected_index() const = 0;
-    virtual void set_selected_index(uint8_t idx) = 0;
-    virtual void add_option(String option_text) = 0;
+    // virtual std::vector<String> get_option_text(uint8_t id) const {return std::vector<String>();}
+    // virtual uint8_t get_selected_index() const {return 0;}
+    // virtual std::vector<String> get_option_text(uint8_t id) const {return std::vector<String>();}
+    // virtual void set_selected_index(uint8_t idx) {return;}
+    // virtual void add_option(String option_text) {return;}
 
     // // APIs for Controls
     // virtual void parse(uint8_t* payload, size_t payload_len);      //
@@ -86,10 +90,12 @@ public:
 
 class Image : public MediaContainer {
 private:
+    uint8_t image_id;
+    ImageFormat image_format;
     uint8_t* content;
-    const size_t content_len;
+    const size_t total_size;
     uint8_t* input_ptr;
-    const uint8_t resolution;
+    ImageResolution resolution;
 
     // Decoding parameters
     uint16_t* decoded_content;
@@ -103,31 +109,37 @@ private:
 
     // JPEGDraw callback function to handle drawing decoded JPEG blocks
     static int JPEGDraw(JPEGDRAW* pDraw);
-    static void decodeTask(void* pvParameters);
+    static void decodeTask(void* pvParameters) {
+        Image* img = static_cast<Image*>(pvParameters);
+        img->decode();
+        vTaskDelete(nullptr);   // Delete task after completion
+    }
     void decode();
     void upscale_2x();
     void startDecode();
 
 public:
-    Image(uint8_t img_id, ImageFormat format, uint32_t total_img_size, size_t duration);
+    Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration);
     ~Image();
 
     virtual uint16_t* get_img();
-    virtual void add_chunk(uint8_t* chunk, size_t chunk_size);
-
+    virtual void add_chunk(const uint8_t* chunk, size_t chunk_size);
     virtual void add_decoded(const uint16_t* img);
+    virtual uint8_t get_image_id() const;
+    virtual ImageFormat get_image_format() const;
+    virtual ImageResolution get_image_resolution() const;
 };
 
 
 class Text : public MediaContainer {
 private:
     String content;
-    FontID font;
+    FontID font_id;
     const uint16_t cursor_x, cursor_y;
 
 public:
     Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy);
-    Text(char* input, size_t duration, FontID ft_id, const uint16_t cx, uint16_t cy);
+    Text(char* input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy);
 
     // APIs for Text
     virtual const uint8_t* get_font() const;
@@ -135,8 +147,25 @@ public:
     virtual uint16_t get_cursor_y() const;
     virtual String get_txt() const;
 
+    virtual FontID get_font_id() const;
+
     // Map font IDs to font pointers
-    static const uint8_t* map_font(FontID font_id);
+    static const uint8_t* map_font(FontID font_id) {
+        switch (font_id) {
+        case FontID::TF:
+            return u8g2_font_unifont_tf;
+        case FontID::ARABIC:
+            return u8g2_font_unifont_t_arabic;
+        case FontID::CHINESE:
+            return u8g2_font_unifont_t_chinese;
+        case FontID::CYRILLIC:
+            return u8g2_font_cu12_t_cyrillic;
+        case FontID::DEVANAGARI:
+            return u8g2_font_unifont_t_devanagari;
+        default:
+            return u8g2_font_unifont_tf;
+        }
+    }
 };
 
 
@@ -144,35 +173,36 @@ class TextGroup : public MediaContainer {
 private:
     std::vector<MediaContainer*> vec;
     size_t next_idx;
-    const uint8_t color;
+    const uint16_t bg_color;
+    const uint16_t font_color;
 
 public:
-    TextGroup(const size_t dur, const uint8_t col);
+    TextGroup(const size_t dur, const uint16_t bg_col, const uint16_t font_col);
     ~TextGroup();
 
     virtual void add_member(MediaContainer* txt);
     virtual size_t size() const;
 
     virtual MediaContainer* get_next();
-    virtual uint8_t get_bg_color() const;
-    virtual uint8_t get_font_color() const;
+    virtual uint16_t get_bg_color() const;
+    virtual uint16_t get_font_color() const;
 };
 
 
-class OptionGroup : public MediaContainer {
-private:
-    std::vector<MediaContainer*> vec;
-    const uint8_t selecting;
+// class OptionGroup : public MediaContainer {
+// private:
+//     std::vector<String> options;
+//     const uint8_t selected_index;
 
-public:
-    OptionGroup(const uint8_t sel);
+// public:
+//     OptionGroup(const uint8_t sel);
 
-    virtual void add_option(String option_text);
-    virtual size_t size() const;
-    virtual vector<String> get_option_text(uint8_t id) const;
-    virtual uint8_t get_selected_index() const;
-    virtual void set_selected_index(uint8_t idx);
-};
+//     virtual void add_option(String option_text);
+//     virtual size_t size() const;
+//     virtual std::vector<String> get_option_text(uint8_t id) const;
+//     virtual uint8_t get_selected_index() const;
+//     virtual void set_selected_index(uint8_t idx);
+// };
 
 // class Control : public MediaContainer {
 // private:

@@ -1,5 +1,4 @@
 #include "screen.h"
-#include "Media.h"
 
 namespace dice {
 
@@ -45,7 +44,7 @@ void Screen::draw_textgroup(MediaContainer* tg) {
     if (tg->get_media_type() != MediaType::TEXTGROUP){
         return;
     }
-    draw_color(PrettyColor::DARKGREY);
+    draw_color(DARKGREY);
     gfx->setTextSize(2);
 
     MediaContainer* next = tg->get_next();
@@ -119,7 +118,7 @@ Screen::Screen()
 
     Wire.setClock(1000000);   // speed up I2C
 
-    gfx->fillScreen(PrettyColor::BLACK);
+    gfx->fillScreen(BLACK);
     gfx->setUTF8Print(true);
 
     expander->pinMode(PCA_TFT_BACKLIGHT, OUTPUT);
@@ -183,23 +182,23 @@ bool Screen::up_button_pressed() {
 }
 
 void Screen::draw_startup_logo() {
-    MediaContainer* med = new Image((size_t) 1, IMG_480, (size_t) 0);
+    MediaContainer* med = new Image(0, ImageFormat::RGB565, ImageResolution::SQ480, 0, 0);
     med->add_decoded(umlogo);
     enqueue(med);
 }
 
 
 // Demo Functions
-MediaContainer* Screen::get_demo_textgroup() {
-    TextGroup* group = new TextGroup(0, RED);
-    group->add_member(new Text("Psíquico", 0, u8g2_font_unifont_tf, 40, 40));
-    group->add_member(new Text("Hellseher", 0, u8g2_font_unifont_tf, 280, 40));
-    group->add_member(new Text("экстрасенс", 0, u8g2_font_cu12_t_cyrillic, 40, 160));
-    group->add_member(new Text("Psychique", 0, u8g2_font_unifont_tf, 280, 160));
-    group->add_member(new Text("Psychic", 0, u8g2_font_unifont_tf, 40, 280));
-    group->add_member(new Text("मानसिक", 0, u8g2_font_unifont_t_devanagari, 280, 280));
-    group->add_member(new Text("靈媒", 0, u8g2_font_unifont_t_chinese, 40, 400));
-    group->add_member(new Text("نفسية", 0, u8g2_font_unifont_t_arabic, 280, 400));
+MediaContainer* get_demo_textgroup() {
+    TextGroup* group = new TextGroup(0, DARKGREY, WHITE);
+    group->add_member(new Text("Psíquico", 0, FontID::TF, 40, 40));
+    group->add_member(new Text("Hellseher", 0, FontID::TF, 280, 40));
+    group->add_member(new Text("экстрасенс", 0, FontID::CYRILLIC, 40, 160));
+    group->add_member(new Text("Psychique", 0, FontID::TF, 280, 160));
+    group->add_member(new Text("Psychic", 0, FontID::TF, 40, 280));
+    group->add_member(new Text("मानसिक", 0, FontID::DEVANAGARI, 280, 280));
+    group->add_member(new Text("靈媒", 0, FontID::CHINESE, 40, 400));
+    group->add_member(new Text("نفسية", 0, FontID::ARABIC, 280, 400));
     return group;
 }
 }   // namespace dice

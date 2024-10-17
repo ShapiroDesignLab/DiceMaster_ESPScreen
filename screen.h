@@ -6,7 +6,6 @@
 
 #include <Arduino_GFX_Library.h>
 #include <U8g2lib.h>
-
 #include "Media.h"
 #include "imageh/rgb565_umlogo.h"
 
@@ -47,7 +46,6 @@ public:
     bool up_button_pressed();
     void draw_startup_logo();
 };
-
 
 // Demo Functions
 MediaContainer* get_demo_textgroup();

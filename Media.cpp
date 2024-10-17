@@ -46,7 +46,7 @@ Text::Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy
     set_status(MediaStatus::READY);
 }
 
-Text::Text(char& input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy)
+Text::Text(char* input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy)
     : MediaContainer(MediaType::TEXT, duration)
     , content(String(input))
     , font_id(ft_id)
@@ -70,24 +70,6 @@ String Text::get_txt() const {
 }
 FontID Text::get_font_id() const {
     return font_id;
-}
-
-// Map font IDs to font pointers
-const uint8_t* Text::map_font(FontID font_id) {
-    switch (font_id) {
-    case FontID::TF:
-        return u8g2_font_unifont_tf;
-    case FontID::ARABIC:
-        return u8g2_font_unifont_t_arabic;
-    case FontID::CHINESE:
-        return u8g2_font_unifont_t_chinese;
-    case FontID::CYRILLIC:
-        return u8g2_font_cu12_t_cyrillic;
-    case FontID::DEVANAGARI:
-        return u8g2_font_unifont_t_devanagari;
-    default:
-        return u8g2_font_unifont_tf;
-    }
 }
 
 
@@ -142,15 +124,10 @@ int Image::JPEGDraw(JPEGDRAW* pDraw) {
     return 1;   // continue decode
 }
 
-static void Image::decodeTask(void* pvParameters) {
-    Image* img = static_cast<Image*>(pvParameters);
-    img->decode();
-    vTaskDelete(nullptr);   // Delete task after completion
-}
 
 void Image::decode() {
     jpeg.setPixelType(RGB565_BIG_ENDIAN);   // Adjust as necessary
-    if (jpeg.openRAM(content, content_len, JPEGDraw)) {
+    if (jpeg.openRAM(content, total_size, JPEGDraw)) {
         jpeg.setUserPointer(this);
         if (jpeg.decode(0, 0, 0)) {   // Decode at full scale
             set_status(MediaStatus::READY);
@@ -181,13 +158,13 @@ void Image::startDecode() {
 }
 
 
-Image::Image(uint8_t img_id, ImageFormat format, uint32_t total_img_size, size_t duration)
+Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration)
     : MediaContainer(MediaType::IMAGE, duration)
     , image_id(img_id)
     , image_format(format)
+    , resolution(res)
     , total_size(total_img_size)
     , content((uint8_t*) ps_malloc(total_img_size))
-    , content_len(total_img_size)
     , input_ptr(content)
     , decoded_content((uint16_t*) ps_malloc(SCREEN_PXLCNT * sizeof(uint16_t)))
     , decodeTaskHandle(nullptr) {
@@ -209,27 +186,26 @@ uint16_t* Image::get_img() {
     return decoded_content;
 }
 
-void Image::add_chunk(uint16_t chunk_number, uint8_t* chunk, size_t chunk_size) {
-    if (input_ptr + chunk_size > content + content_len) {
+void Image::add_chunk(const uint8_t* chunk, size_t chunk_size) {
+    if (input_ptr + chunk_size > content + total_size) {
         return;
     }
     memcpy(input_ptr, chunk, chunk_size);
     input_ptr += chunk_size;
 
-    if (received_len() == content_len) {
-        if (image_format == ImageFormat::JPEG480 || image_format == ImageFormat::JPEG240) {
+    if (received_len() == total_size) {
+        if (image_format == ImageFormat::JPEG) {
             startDecode();
-        } else if (image_format == ImageFormat::BMP480) {
+        } else if (image_format == ImageFormat::RGB565) {
             // For RGB565 bitmap, no decoding needed
-            memcpy(decoded_content, content, content_len);
-        }
-        else if (image_format == ImageFormat::BMP240) {
-            memcpy(decoded_content, content, content_len);
-            upscale_2x();
+            memcpy(decoded_content, content, total_size);
         }
         free(content);
         content = nullptr;
         set_status(MediaStatus::READY);
+    }
+    if (image_format == ImageFormat::RGB565 && resolution == ImageResolution::SQ240) {
+        upscale_2x();
     }
 }
 
@@ -241,46 +217,51 @@ ImageFormat Image::get_image_format() const {
     return image_format;
 }
 
-void Image::add_decoded(const uint16_t* img) { 
-    add_chunk(0, img, SCREEN_PXLCNT * sizeof(uint16_t)) 
+ImageResolution Image::get_image_resolution() const {
+    return resolution;
 }
 
-OptionGroup::OptionGroup(uint8_t selected_idx)
-    : MediaContainer(MediaType::OPTION, 0)
-    , selected_index(selected_idx) {
-    set_status(MediaStatus::READY);
+void Image::add_decoded(const uint16_t* img) {
+  memcpy(decoded_content, img, SCREEN_PXLCNT * sizeof(uint16_t));
+  set_status(MediaStatus::READY);
 }
 
-void OptionGroup::add_option(String option_text) {
-    options.push_back(option_text);
-}
+// OptionGroup::OptionGroup(uint8_t selected_idx)
+//     : MediaContainer(MediaType::OPTION, 0)
+//     , selected_index(selected_idx) {
+//     set_status(MediaStatus::READY);
+// }
 
-size_t OptionGroup::size() const {
-    return options.size();
-}
+// void OptionGroup::add_option(String option_text) {
+//     options.push_back(option_text);
+// }
 
-vector<String> OptionGroup::get_option_text(uint8_t select_id) const {
-    if (options.size() <= 1) {
-        return options;
-    }
-    if (select_id == 0) {
-        return vector<String>(String(), options[0], options[1]);
-    }
-    if (select_id == options.size()-1) {
-        return vector<String>(options[select_id-1], options[select_id], String());
-    }
-    return vector<String>(options[select_id-1], options[select_id], options[select_id+1]);
-}
+// size_t OptionGroup::size() const {
+//     return options.size();
+// }
 
-uint8_t OptionGroup::get_selected_index() const {
-    return selected_index;
-}
+// std::vector<String> OptionGroup::get_option_text(uint8_t select_id) const {
+//     if (options.size() <= 1) {
+//         return options;
+//     }
+//     if (select_id == 0) {
+//         return std::vector<String>(String(), options[0], options[1]);
+//     }
+//     if (select_id == options.size()-1) {
+//         return std::vector<String>(options[select_id-1], options[select_id], String());
+//     }
+//     return std::vector<String>(options[select_id-1], options[select_id], options[select_id+1]);
+// }
 
-void OptionGroup::set_selected_index(uint8_t idx) {
-    if (idx < options.size()) {
-        selected_index = idx;
-    }
-}
+// uint8_t OptionGroup::get_selected_index() const {
+//     return selected_index;
+// }
+
+// void OptionGroup::set_selected_index(uint8_t idx) {
+//     if (idx < options.size()) {
+//         selected_index = idx;
+//     }
+// }
 
 // void OptionUpdate::OptionUpdate(const uint8_t new_id) 
 //     : selecting_id(new_id)

@@ -1,5 +1,5 @@
-#include "SPI_Driver.h"
-#include "Screen_Driver.h"
+#include "screen.h"
+#include "spi.h"
 
 using namespace dice;
 
