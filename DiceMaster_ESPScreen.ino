@@ -9,8 +9,8 @@ SPIDriver* spid;
 void setup(void)
 {
   // // Init serial
-  // Serial.begin(115200);
-  // Serial.println("Beginning");
+  Serial.begin(115200);
+  Serial.println("Begin Transmissions");
 
   // Check PSRAM Init Status
   if (psramInit()) Serial.println("\nPSRAM correctly initialized");
@@ -20,6 +20,8 @@ void setup(void)
   screen = new Screen();
 }
 
+
+// SUCCESS!!!
 uint8_t* make_test_text_message(){
   uint8_t header[5] = {0x7E, 0x01, 0x01, 0x00, 0x14};
   uint8_t group_color[4] = {0xF7, 0x9E, 0x08, 0x61};
@@ -50,7 +52,7 @@ void loop()
   screen->update();
   delay(1000); 
 
-  // Draw Text
+  // Draw Text To Debug Parser
   // screen->enqueue(get_demo_textgroup());
   uint8_t* msg = make_test_text_message();
   screen->enqueue(spid->parse_message(msg, 23));

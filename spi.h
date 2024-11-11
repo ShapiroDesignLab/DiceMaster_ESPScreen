@@ -216,7 +216,6 @@ MediaContainer* SPIDriver::parse_message(uint8_t* buf, size_t buf_size) {
 
 MediaContainer* SPIDriver::handle_text_batch(uint8_t* payload, size_t payload_length, uint8_t message_id) {
     if (payload_length < 5) {
-        // send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Text Batch");
         return show_debug_info("String Length Less than 5!");
     }
 
