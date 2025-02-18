@@ -7,7 +7,8 @@
 #include <Arduino_GFX_Library.h>
 #include <U8g2lib.h>
 #include "Media.h"
-#include "imageh/rgb565_umlogo.h"
+// #include "imageh/rgb565_umlogo.h"
+#include "imageh/umlogo_jpg.h"
 
 
 namespace dice {

@@ -111,7 +111,9 @@ private:
     static int JPEGDraw(JPEGDRAW* pDraw);
     static void decodeTask(void* pvParameters) {
         Image* img = static_cast<Image*>(pvParameters);
+        Serial.println("Pending decode");
         img->decode();
+        Serial.println("Task Done");
         vTaskDelete(nullptr);   // Delete task after completion
     }
     void decode();

@@ -116,26 +116,40 @@ size_t Image::received_len() {
 }
 
 int Image::JPEGDraw(JPEGDRAW* pDraw) {
+    Serial.println("Drawing");
     Image* img = static_cast<Image*>(pDraw->pUser);
     img->decode_mtx.lock();
-    uint16_t* destination = img->decoded_content + (pDraw->y * 480 + pDraw->x);
-    memcpy(destination, pDraw->pPixels, pDraw->iWidth * pDraw->iHeight * sizeof(uint16_t));
+    // uint16_t* destination = img->decoded_content + (pDraw->y * 480 + pDraw->x);
+    // memcpy(destination, pDraw->pPixels, pDraw->iWidth * pDraw->iHeight * sizeof(uint16_t));
+    Serial.println("Plotting chunk");
+    for (int row = 0; row < pDraw->iHeight; row++) {
+        // Calculate the start of the line in the final buffer
+        uint16_t* dest_line = img->decoded_content + (pDraw->y + row) * 480 + pDraw->x;
+        // Calculate the source line within pPixels
+        const uint16_t* src_line = ((uint16_t*)pDraw->pPixels) + row * pDraw->iWidth;
+
+        memcpy(dest_line, src_line, pDraw->iWidth * sizeof(uint16_t));
+    }
     img->decode_mtx.unlock();
     return 1;   // continue decode
 }
 
 
 void Image::decode() {
-    jpeg.setPixelType(RGB565_BIG_ENDIAN);   // Adjust as necessary
+    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);   // Adjust as necessary
+    Serial.println("Set endianness");
     if (jpeg.openRAM(content, total_size, JPEGDraw)) {
+        Serial.println("Decoding");
         jpeg.setUserPointer(this);
         if (jpeg.decode(0, 0, 0)) {   // Decode at full scale
             set_status(MediaStatus::READY);
         }
         jpeg.close();
+        Serial.println("Closed jpeg, completed decoding");
         free(content);   // Free original content as it's no longer needed
         content = nullptr;
     } else {
+        Serial.println("Expired image");
         set_status(MediaStatus::EXPIRED);   // Handle error appropriately
     }
 }
@@ -154,7 +168,9 @@ void Image::upscale_2x() {
 
 void Image::startDecode() {
     set_status(MediaStatus::DECODING);
+    Serial.println("Decoding status");
     xTaskCreatePinnedToCore(decodeTask, "DecodeTask", 8192, this, 1, &decodeTaskHandle, 0);
+    Serial.println("Task started");
 }
 
 
@@ -197,6 +213,7 @@ void Image::add_chunk(const uint8_t* chunk, size_t chunk_size) {
 
     if (received_len() == total_size) {
         if (image_format == ImageFormat::JPEG) {
+            Serial.println("Started decoding");
             startDecode();
         } else if (image_format == ImageFormat::RGB565) {
             // For RGB565 bitmap, no decoding needed

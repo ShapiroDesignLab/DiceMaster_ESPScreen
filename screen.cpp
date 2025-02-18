@@ -187,8 +187,9 @@ bool Screen::up_button_pressed() {
 }
 
 void Screen::draw_startup_logo() {
-    MediaContainer* med = new Image(0, ImageFormat::RGB565, ImageResolution::SQ480, 0, 0);
-    med->add_decoded(umlogo);
+    MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ480, umlogo_jpg_SIZE, 0);
+    med->add_chunk(umlogo_jpg, umlogo_jpg_SIZE);
+    // med->add_decoded(umlogo);
     enqueue(med);
 }
 
