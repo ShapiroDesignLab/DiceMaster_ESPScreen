@@ -111,13 +111,14 @@ private:
     static int JPEGDraw(JPEGDRAW* pDraw);
     static void decodeTask(void* pvParameters) {
         Image* img = static_cast<Image*>(pvParameters);
-        Serial.println("Pending decode");
         img->decode();
-        Serial.println("Task Done");
         vTaskDelete(nullptr);   // Delete task after completion
     }
     void decode();
     void upscale_2x();
+    void upscale_2x_y();
+    // Testing only
+    void mask_up(int32_t start, int32_t len);
     void startDecode();
 
 public:
@@ -217,7 +218,7 @@ public:
 // };
 
 MediaContainer* get_demo_textgroup();
-MediaContainer* show_debug_info(String input);
+MediaContainer* print_error(String input);
 
 }   // namespace dice
 

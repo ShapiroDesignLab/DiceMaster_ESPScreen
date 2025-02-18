@@ -55,6 +55,7 @@ void loop()
   // Draw Text To Debug Parser
   // screen->enqueue(get_demo_textgroup());
   uint8_t* msg = make_test_text_message();
+  // Serial.println("Updated text");
   screen->enqueue(spid->parse_message(msg, 23));
   delete msg;
   screen->update();

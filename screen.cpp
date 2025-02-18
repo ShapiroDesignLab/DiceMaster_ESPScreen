@@ -128,9 +128,9 @@ Screen::Screen()
     expander->pinMode(PCA_TFT_BACKLIGHT, OUTPUT);
     expander->digitalWrite(PCA_TFT_BACKLIGHT, HIGH);
 
-    draw_startup_logo();
+    // draw_startup_logo();
 
-    // Serial.println("Screen Initialized!");
+    Serial.println("Screen Initialized!");
 }
 
 
@@ -187,10 +187,23 @@ bool Screen::up_button_pressed() {
 }
 
 void Screen::draw_startup_logo() {
-    MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ480, umlogo_jpg_SIZE, 0);
-    med->add_chunk(umlogo_jpg, umlogo_jpg_SIZE);
-    // med->add_decoded(umlogo);
-    enqueue(med);
+    try {
+      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ480, umlogo_jpg_SIZE, 0);
+      int input_time = millis();
+      med->add_chunk(umlogo_jpg, umlogo_jpg_SIZE);
+      while (med->get_status() != MediaStatus::READY) {
+        delay(1);
+      }
+      Serial.print("Decoding took ");
+      Serial.print(millis()-input_time);
+      Serial.println(" (ms)");
+      enqueue(med);
+    }
+    catch (...) {
+      MediaContainer* err = print_error("Startup Logo Decoding Failed");
+      enqueue(err);
+    }
+
 }
 
 }   // namespace dice

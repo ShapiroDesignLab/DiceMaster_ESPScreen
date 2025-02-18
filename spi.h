@@ -185,7 +185,7 @@ void SPIDriver::reset_expectations() {
 MediaContainer* SPIDriver::parse_message(uint8_t* buf, size_t buf_size) {
     if (buf[0] != SOF_MARKER) {
         // Invalid Start of Frame
-        return show_debug_info("Invalid SOF Received");
+        return print_error("Invalid SOF Received");
     }
     MessageType message_type = static_cast<MessageType>(buf[1]);
     uint8_t message_id = buf[2];
@@ -210,13 +210,13 @@ MediaContainer* SPIDriver::parse_message(uint8_t* buf, size_t buf_size) {
     default:
         // Unknown Message Type
         // send_error(message_id, ErrorCode::UNKNOWN_MSG_TYPE, "Unknown Message Type");
-        return show_debug_info("Unknown Message Type!");
+        return print_error("Unknown Message Type!");
     }
 }
 
 MediaContainer* SPIDriver::handle_text_batch(uint8_t* payload, size_t payload_length, uint8_t message_id) {
     if (payload_length < 5) {
-        return show_debug_info("String Length Less than 5!");
+        return print_error("String Length Less than 5!");
     }
 
     uint16_t bg_color = (payload[0] << 8) | payload[1];
@@ -229,7 +229,7 @@ MediaContainer* SPIDriver::handle_text_batch(uint8_t* payload, size_t payload_le
     for (uint8_t i = 0; i < num_items; ++i) {
         if (offset + 6 > payload_length) {
             delete text_group;
-            return show_debug_info("Not Enough Content for Text!");
+            return print_error("Not Enough Content for Text!");
         }
 
         uint16_t x_pos = bytes_to_uint16(payload[offset], payload[offset + 1]);
@@ -239,7 +239,7 @@ MediaContainer* SPIDriver::handle_text_batch(uint8_t* payload, size_t payload_le
 
         if (offset + 6 + text_length > payload_length) {
             delete text_group;
-            return show_debug_info("Text length exceeds payload!");
+            return print_error("Text length exceeds payload!");
         }
 
         String text = String((char*) &payload[offset + 6], text_length);
