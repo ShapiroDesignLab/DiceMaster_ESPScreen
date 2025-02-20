@@ -197,59 +197,11 @@ void Image::decode() {
     }
 }
 
-
-// // TEST ONLY
-// void Image::mask_up(int32_t start, int32_t len) {
-//     uint16_t* ptr = decoded_content + start;
-//     for (int32_t i = 0;i < len;i++){
-//       *(ptr++) = 0x00;
-//     }
-// }
-
-// void Image::upscale_2x() {
-//   uint16_t pxl;
-//     for (int32_t y = 239; y >= 0; y--) {
-//         for (int32_t x = 239; x >= 0; x--) {
-//             pxl = decoded_content[y*240 + x];
-//             decoded_content[2*y*480 + 2*x] = pxl;
-//             decoded_content[2*y*480 + 2*x+1] = pxl;
-//             decoded_content[(2*y+1)*480 + 2*x] = pxl;
-//             decoded_content[(2*y+1)*480 + 2*x+1] = pxl;
-//         }
-//     }
-// }
-
-// void Image::upscale_2x_y() {
-//     for (int32_t y = 239; y >= 0; y--) {
-//         uint16_t* dest_ptr_1 = decoded_content + 2*y*480;
-//         uint16_t* dest_ptr_2 = decoded_content + (2*y+1)*480;
-//         uint16_t* src_ptr = decoded_content + y*480;
-//         memcpy(dest_ptr_2, src_ptr, 480*sizeof(uint16_t));
-//         memcpy(dest_ptr_1, src_ptr, 480*sizeof(uint16_t));
-//     }
-// }
-
-// void Image::upscale_2x() {
-//     uint16_t pxl;
-//     int32_t row_start, dest_ptr, src_ptr=decoded_content+240*240-1;
-//     for (int32_t y = 239; y >= 0; y--) {
-//         for (int32_t x = 239; x >= 0; x--) {
-//             pxl = *(src_ptr--);
-//             *(dest_ptr) = pxl;
-//             *(dest_ptr+1) = pxl;
-//             dest_ptr -= 2;
-//         }
-//         // Copy the entire row forward
-//         memcpy((dest_ptr+2+480), (dest_ptr+2), 480*sizeof(uint16_t));
-//     }
-// }
-
 void Image::startDecode() {
     set_status(MediaStatus::DECODING);
     xTaskCreatePinnedToCore(decodeTask, "DecodeTask", 8192, this, 1, &decodeTaskHandle, 0);
     // Serial.println("Task started");
 }
-
 
 Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration)
     : MediaContainer(MediaType::IMAGE, duration)

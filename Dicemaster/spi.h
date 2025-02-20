@@ -120,7 +120,7 @@ std::vector<MediaContainer*> SPIDriver::process_msgs() {
 
         // For each received message, deal with it and return a vector of containers
         for (auto buf_len : received_bytes) {
-            MediaContainer* res = parse_message(dma_rx_buf + len_counter, buf_len);
+            MediaContainer* res = parse_message(dma_rx_buf+len_counter, buf_len);
             if (res != nullptr) media_vec.push_back(res);
             len_counter += buf_len;
         }
@@ -193,28 +193,30 @@ MediaContainer* SPIDriver::parse_message(uint8_t* buf, size_t buf_size) {
     uint8_t* payload = buf+5;
 
     switch (message_type) {
-    case MessageType::TEXT_BATCH:
-        return handle_text_batch(payload, payload_length, message_id);
-    // case MessageType::IMAGE_TRANSFER_START:
-    //     return handle_image_transfer_start(payload, payload_length, message_id);
-    // case MessageType::IMAGE_CHUNK:
-    //     return handle_image_chunk(payload, payload_length, message_id);
-    // case MessageType::IMAGE_TRANSFER_END:
-    //     return handle_image_transfer_end(payload, payload_length, message_id);
-    // case MessageType::OPTION_LIST:
-    //     return handle_option_list(payload, payload_length, message_id);
-    // case MessageType::OPTION_SELECTION_UPDATE:
-    //     return handle_option_selection_update(payload, payload_length, message_id);
-    // case MessageType::BACKLIGHT_CONTROL:
-    //     return handle_backlight_control(payload, payload_length, message_id);
-    default:
-        // Unknown Message Type
-        // send_error(message_id, ErrorCode::UNKNOWN_MSG_TYPE, "Unknown Message Type");
-        return print_error("Unknown Message Type!");
+        case MessageType::TEXT_BATCH:
+          return handle_text_batch(payload, payload_length, message_id);
+        case MessageType::IMAGE_TRANSFER_START:
+            return handle_image_transfer_start(payload, payload_length, message_id);
+        case MessageType::IMAGE_CHUNK:
+            return handle_image_chunk(payload, payload_length, message_id);
+        case MessageType::IMAGE_TRANSFER_END:
+            return handle_image_transfer_end(payload, payload_length, message_id);
+        // case MessageType::OPTION_LIST:
+        //     return handle_option_list(payload, payload_length, message_id);
+        // case MessageType::OPTION_SELECTION_UPDATE:
+        //     return handle_option_selection_update(payload, payload_length, message_id);
+        // case MessageType::BACKLIGHT_CONTROL:
+        //     return handle_backlight_control(payload, payload_length, message_id);
+        default:
+          // Unknown Message Type
+          // send_error(message_id, ErrorCode::UNKNOWN_MSG_TYPE, "Unknown Message Type");
+          return print_error("Unknown Message Type!");
     }
 }
 
 MediaContainer* SPIDriver::handle_text_batch(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+    // Specification at
+    // https://docs.google.com/document/d/1ovbKFz1-aYnTLMupWtqQHsDRdrbPbAs7edm_ehnVuko/
     if (payload_length < 5) {
         return print_error("String Length Less than 5!");
     }
@@ -253,35 +255,37 @@ MediaContainer* SPIDriver::handle_text_batch(uint8_t* payload, size_t payload_le
     return text_group;
 }
 
-// MediaContainer* SPIDriver::handle_image_transfer_start(uint8_t* payload, size_t payload_length, uint8_t message_id) {
-//     if (payload_length < 9) {
-//         send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Image Transfer Start");
-//         return nullptr;
-//     }
+MediaContainer* SPIDriver::handle_image_transfer_start(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+    // Specification at
+    // https://docs.google.com/document/d/1ovbKFz1-aYnTLMupWtqQHsDRdrbPbAs7edm_ehnVuko/
+    if (payload_length < 9) {
+        send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Image Transfer Start");
+        return nullptr;
+    }
 
-//     uint8_t image_id = payload[0];
-//     ImageFormat image_format = static_cast<ImageFormat>(payload[1]);
-//     ImageResolution image_resolution = static_cast<ImageResolution>(payload[2]);
-//     uint32_t total_size = bytes_to_uint32(&payload[3]);
-//     uint16_t delay_time = bytes_to_uint16(payload[6], payload[7]);
+    uint8_t image_id = payload[0];
+    ImageFormat image_format = static_cast<ImageFormat>(payload[1]);
+    ImageResolution image_resolution = static_cast<ImageResolution>(payload[2]);
+    uint32_t total_size = bytes_to_uint32(&payload[3]);
+    uint16_t delay_time = bytes_to_uint16(payload[6], payload[7]);
 
-//     if (ongoing_transfers.find(image_id) != ongoing_transfers.end()) {
-//         send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID already in use");
-//         return nullptr;
-//     }
+    if (ongoing_transfers.find(image_id) != ongoing_transfers.end()) {
+        send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID already in use");
+        return nullptr;
+    }
 
-//     Image* image = new Image(image_id, image_format, image_resolution, total_size, 0);
+    Image* image = new Image(image_id, image_format, image_resolution, total_size, 0);
 
-//     if (image->get_status() == MediaStatus::EXPIRED) {
-//         send_error(message_id, ErrorCode::OUT_OF_MEMORY, "Failed to allocate memory for image");
-//         delete image;
-//         return nullptr;
-//     }
+    if (image->get_status() == MediaStatus::EXPIRED) {
+        send_error(message_id, ErrorCode::OUT_OF_MEMORY, "Failed to allocate memory for image");
+        delete image;
+        return nullptr;
+    }
 
-//     ongoing_transfers[image_id] = image;
-//     send_ack(message_id, ErrorCode::SUCCESS);
-//     return nullptr;
-// }
+    ongoing_transfers[image_id] = image;
+    send_ack(message_id, ErrorCode::SUCCESS);
+    return nullptr;
+}
 
 // MediaContainer* SPIDriver::handle_image_chunk(uint8_t* payload, size_t payload_length, uint8_t message_id) {
 //     if (payload_length < 3) {

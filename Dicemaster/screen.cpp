@@ -188,15 +188,12 @@ bool Screen::up_button_pressed() {
 
 void Screen::draw_startup_logo() {
     try {
-      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 0);
+      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 500);
       int input_time = millis();
       med->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
       while (med->get_status() != MediaStatus::READY) {
         delay(1);
       }
-      Serial.print("Decoding took ");
-      Serial.print(millis()-input_time);
-      Serial.println(" (ms)");
       enqueue(med);
     }
     catch (...) {
