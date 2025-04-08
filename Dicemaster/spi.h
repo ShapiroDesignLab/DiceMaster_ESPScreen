@@ -61,15 +61,15 @@ private:
     std::map<uint8_t, MediaContainer*> ongoing_transfers;
 
     // Acknowledgment and Error Handling
-    // void send_ack(uint8_t message_id, ErrorCode status_code);
-    // void send_error(uint8_t message_id, ErrorCode error_code, const std::string& error_msg);
+    void send_ack(uint8_t message_id, ErrorCode status_code);
+    void send_error(uint8_t message_id, ErrorCode error_code, const std::string& error_msg);
 
     // Parsing Functions
     
     MediaContainer* handle_text_batch(uint8_t* payload, size_t payload_length, uint8_t message_id);
-    // MediaContainer* handle_image_transfer_start(uint8_t* payload, size_t payload_length, uint8_t message_id);
-    // MediaContainer* handle_image_chunk(uint8_t* payload, size_t payload_length, uint8_t message_id);
-    // MediaContainer* handle_image_transfer_end(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_image_transfer_start(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_image_chunk(uint8_t* payload, size_t payload_length, uint8_t message_id);
+    MediaContainer* handle_image_transfer_end(uint8_t* payload, size_t payload_length, uint8_t message_id);
     // MediaContainer* handle_option_list(uint8_t* payload, size_t payload_length, uint8_t message_id);
     // MediaContainer* handle_option_selection_update(uint8_t* payload, size_t payload_length, uint8_t message_id);
     // MediaContainer* handle_backlight_control(uint8_t* payload, size_t payload_length, uint8_t message_id);
@@ -143,44 +143,44 @@ void SPIDriver::reset_expectations() {
     expecting_container = nullptr;
 }
 
-// void SPIDriver::send_ack(uint8_t message_id, ErrorCode status_code) {
-//     uint8_t ack_msg[7];
-//     ack_msg[0] = SOF_MARKER;
-//     ack_msg[1] = static_cast<uint8_t>(MessageType::ACK);
-//     ack_msg[2] = message_id;
-//     ack_msg[3] = 0x00;                                 // Payload Length High Byte
-//     ack_msg[4] = 0x01;                                 // Payload Length Low Byte
-//     ack_msg[5] = static_cast<uint8_t>(status_code);    // Status Code
-//     ack_msg[6] = calculate_checksum(&ack_msg[1], 5);   // Checksum
+void SPIDriver::send_ack(uint8_t message_id, ErrorCode status_code) {
+    uint8_t ack_msg[7];
+    ack_msg[0] = SOF_MARKER;
+    ack_msg[1] = static_cast<uint8_t>(MessageType::ACK);
+    ack_msg[2] = message_id;
+    ack_msg[3] = 0x00;                                 // Payload Length High Byte
+    ack_msg[4] = 0x01;                                 // Payload Length Low Byte
+    ack_msg[5] = static_cast<uint8_t>(status_code);    // Status Code
+    // ack_msg[6] = calculate_checksum(&ack_msg[1], 5);   // Checksum
 
-//     // Send ACK message
-//     slave.queue(ack_msg, nullptr, sizeof(ack_msg));
+    // Send ACK message
+    slave.queue(ack_msg, nullptr, sizeof(ack_msg));
 
-//     delete[] ack_msg;
-// }
+    delete[] ack_msg;
+}
 
-// void SPIDriver::send_error(uint8_t message_id, ErrorCode error_code, const std::string& error_msg) {
-//     size_t error_msg_length = error_msg.size();
-//     size_t total_length = 7 + error_msg_length;   // Header + Payload + Checksum
+void SPIDriver::send_error(uint8_t message_id, ErrorCode error_code, const std::string& error_msg) {
+    size_t error_msg_length = error_msg.size();
+    size_t total_length = 7 + error_msg_length;   // Header + Payload + Checksum
 
-//     uint8_t* error_packet = new uint8_t[total_length];
-//     error_packet[0] = SOF_MARKER;
-//     error_packet[1] = static_cast<uint8_t>(MessageType::ERROR);
-//     error_packet[2] = message_id;
-//     error_packet[3] = 0x00;                                             // Payload Length High Byte
-//     error_packet[4] = static_cast<uint8_t>(1 + 1 + error_msg_length);   // Payload Length Low Byte
-//     error_packet[5] = static_cast<uint8_t>(error_code);
-//     error_packet[6] = static_cast<uint8_t>(error_msg_length);
+    uint8_t* error_packet = new uint8_t[total_length];
+    error_packet[0] = SOF_MARKER;
+    error_packet[1] = static_cast<uint8_t>(MessageType::ERROR);
+    error_packet[2] = message_id;
+    error_packet[3] = 0x00;                                             // Payload Length High Byte
+    error_packet[4] = static_cast<uint8_t>(1 + 1 + error_msg_length);   // Payload Length Low Byte
+    error_packet[5] = static_cast<uint8_t>(error_code);
+    error_packet[6] = static_cast<uint8_t>(error_msg_length);
 
-//     memcpy(&error_packet[7], error_msg.c_str(), error_msg_length);
+    memcpy(&error_packet[7], error_msg.c_str(), error_msg_length);
 
-//     error_packet[7 + error_msg_length] = calculate_checksum(&error_packet[1], 5 + error_msg_length);
+    // error_packet[7 + error_msg_length] = calculate_checksum(&error_packet[1], 5 + error_msg_length);
 
-//     // Send Error message
-//     slave.queue(error_packet, nullptr, total_length);
+    // Send Error message
+    slave.queue(error_packet, nullptr, total_length);
 
-//     delete[] error_packet;
-// }
+    delete[] error_packet;
+}
 
 MediaContainer* SPIDriver::parse_message(uint8_t* buf, size_t buf_size) {
     if (buf[0] != SOF_MARKER) {
@@ -195,12 +195,12 @@ MediaContainer* SPIDriver::parse_message(uint8_t* buf, size_t buf_size) {
     switch (message_type) {
         case MessageType::TEXT_BATCH:
           return handle_text_batch(payload, payload_length, message_id);
-        case MessageType::IMAGE_TRANSFER_START:
-            return handle_image_transfer_start(payload, payload_length, message_id);
-        case MessageType::IMAGE_CHUNK:
-            return handle_image_chunk(payload, payload_length, message_id);
-        case MessageType::IMAGE_TRANSFER_END:
-            return handle_image_transfer_end(payload, payload_length, message_id);
+        // case MessageType::IMAGE_TRANSFER_START:
+        //     return handle_image_transfer_start(payload, payload_length, message_id);
+        // case MessageType::IMAGE_CHUNK:
+        //     return handle_image_chunk(payload, payload_length, message_id);
+        // case MessageType::IMAGE_TRANSFER_END:
+        //     return handle_image_transfer_end(payload, payload_length, message_id);
         // case MessageType::OPTION_LIST:
         //     return handle_option_list(payload, payload_length, message_id);
         // case MessageType::OPTION_SELECTION_UPDATE:
@@ -209,7 +209,7 @@ MediaContainer* SPIDriver::parse_message(uint8_t* buf, size_t buf_size) {
         //     return handle_backlight_control(payload, payload_length, message_id);
         default:
           // Unknown Message Type
-          // send_error(message_id, ErrorCode::UNKNOWN_MSG_TYPE, "Unknown Message Type");
+          send_error(message_id, ErrorCode::UNKNOWN_MSG_TYPE, "Unknown Message Type");
           return print_error("Unknown Message Type!");
     }
 }

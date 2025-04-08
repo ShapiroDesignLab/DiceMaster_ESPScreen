@@ -175,12 +175,12 @@ void Image::decode() {
     // Set the drawing function
     int (*JPEGDraw) (JPEGDRAW*);
     if (resolution == ImageResolution::SQ240) {
-      Serial.println("Decoding 240x240");
+      // Serial.println("Decoding 240x240");
       JPEGDraw = JPEGDraw240; 
     }
     else{
       JPEGDraw = JPEGDraw480; 
-      Serial.println("Decoding 480x480");
+      // Serial.println("Decoding 480x480");
     }
     // Decode
     if (jpeg.openRAM(content, total_size, JPEGDraw)) {

@@ -1,4 +1,7 @@
 #include "screen.h"
+#include "jpg.hs/umlogo_sq240.h"
+// #include "jpg.hs/rev_umlogo_12_sq240.h"
+#include "jpg.hs/revolving_umlogo.h"
 
 namespace dice {
 
@@ -186,6 +189,10 @@ bool Screen::up_button_pressed() {
     return !expander->digitalRead(PCA_BUTTON_UP);
 }
 
+int Screen::num_queued() {
+    return display_queue.size();
+}
+
 void Screen::draw_startup_logo() {
     try {
       MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 500);
@@ -200,7 +207,31 @@ void Screen::draw_startup_logo() {
       MediaContainer* err = print_error("Startup Logo Decoding Failed");
       enqueue(err);
     }
+}
 
+void Screen::draw_revolving_logo() {
+    if (num_queued() > 1) {
+        return;
+    }
+    const uint8_t* img_arr = revolving_umlogo_array[revolv_idx];
+    int img_size = revolving_umlogo_sizes[revolv_idx];
+    try {
+      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, img_size, 1);
+      int input_time = millis();
+      med->add_chunk(img_arr, img_size);
+      while (med->get_status() != MediaStatus::READY) {
+        delay(1);
+      }
+    //   Serial.print("Decoded in ");
+    //   Serial.print(millis()-input_time);
+    //   Serial.println(" ms");
+      enqueue(med);
+      revolv_idx = (revolv_idx+1) % revolving_umlogo_num;
+    }
+    catch (...) {
+      MediaContainer* err = print_error("Revolving Logo Decoding Failed");
+      enqueue(err);
+    }
 }
 
 }   // namespace dice

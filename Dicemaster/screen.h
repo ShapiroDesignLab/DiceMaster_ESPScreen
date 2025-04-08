@@ -7,7 +7,6 @@
 #include <Arduino_GFX_Library.h>
 #include <U8g2lib.h>
 #include "Media.h"
-#include "jpg.hs/umlogo_sq240.h"
 
 
 namespace dice {
@@ -21,6 +20,8 @@ private:
     std::deque<MediaContainer*> display_queue;
     uint16_t* screen_buffer;
     MediaContainer* current_disp;
+
+    int revolv_idx = 0;
 
     bool is_next_ready();
     bool is_option_media(MediaContainer* med);
@@ -44,7 +45,11 @@ public:
     void set_backlight(bool to_on);
     bool down_button_pressed();
     bool up_button_pressed();
+    int num_queued();
+
+    // Demo functions
     void draw_startup_logo();
+    void draw_revolving_logo();
 };
 
 // Demo Functions
