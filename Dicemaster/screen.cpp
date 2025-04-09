@@ -1,6 +1,5 @@
 #include "screen.h"
 #include "jpg.hs/umlogo_sq240.h"
-// #include "jpg.hs/rev_umlogo_12_sq240.h"
 #include "jpg.hs/revolving_umlogo.h"
 
 namespace dice {
@@ -222,9 +221,6 @@ void Screen::draw_revolving_logo() {
       while (med->get_status() != MediaStatus::READY) {
         delay(1);
       }
-    //   Serial.print("Decoded in ");
-    //   Serial.print(millis()-input_time);
-    //   Serial.println(" ms");
       enqueue(med);
       revolv_idx = (revolv_idx+1) % revolving_umlogo_num;
     }

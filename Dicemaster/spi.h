@@ -195,12 +195,15 @@ MediaContainer* SPIDriver::parse_message(uint8_t* buf, size_t buf_size) {
     switch (message_type) {
         case MessageType::TEXT_BATCH:
           return handle_text_batch(payload, payload_length, message_id);
-        // case MessageType::IMAGE_TRANSFER_START:
-        //     return handle_image_transfer_start(payload, payload_length, message_id);
-        // case MessageType::IMAGE_CHUNK:
-        //     return handle_image_chunk(payload, payload_length, message_id);
-        // case MessageType::IMAGE_TRANSFER_END:
-        //     return handle_image_transfer_end(payload, payload_length, message_id);
+        case MessageType::IMAGE_TRANSFER_START:
+            Serial.println("Transfer Start");
+            return handle_image_transfer_start(payload, payload_length, message_id);
+        case MessageType::IMAGE_CHUNK:
+            Serial.println("Parse Chunk");
+            return handle_image_chunk(payload, payload_length, message_id);
+        case MessageType::IMAGE_TRANSFER_END:
+            Serial.println("Parse End");
+            return handle_image_transfer_end(payload, payload_length, message_id);
         // case MessageType::OPTION_LIST:
         //     return handle_option_list(payload, payload_length, message_id);
         // case MessageType::OPTION_SELECTION_UPDATE:
@@ -251,7 +254,7 @@ MediaContainer* SPIDriver::handle_text_batch(uint8_t* payload, size_t payload_le
         offset += 6 + text_length;
     }
 
-    // send_ack(message_id, ErrorCode::SUCCESS);
+    send_ack(message_id, ErrorCode::SUCCESS);
     return text_group;
 }
 
@@ -260,6 +263,7 @@ MediaContainer* SPIDriver::handle_image_transfer_start(uint8_t* payload, size_t 
     // https://docs.google.com/document/d/1ovbKFz1-aYnTLMupWtqQHsDRdrbPbAs7edm_ehnVuko/
     if (payload_length < 9) {
         send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Image Transfer Start");
+        Serial.println("Invalid Format in Start!");
         return nullptr;
     }
 
@@ -271,12 +275,14 @@ MediaContainer* SPIDriver::handle_image_transfer_start(uint8_t* payload, size_t 
 
     if (ongoing_transfers.find(image_id) != ongoing_transfers.end()) {
         send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID already in use");
+        Serial.println("Image ID already in use!");
         return nullptr;
     }
 
     Image* image = new Image(image_id, image_format, image_resolution, total_size, 0);
 
     if (image->get_status() == MediaStatus::EXPIRED) {
+        Serial.println("Media Expired!");
         send_error(message_id, ErrorCode::OUT_OF_MEMORY, "Failed to allocate memory for image");
         delete image;
         return nullptr;
@@ -287,49 +293,52 @@ MediaContainer* SPIDriver::handle_image_transfer_start(uint8_t* payload, size_t 
     return nullptr;
 }
 
-// MediaContainer* SPIDriver::handle_image_chunk(uint8_t* payload, size_t payload_length, uint8_t message_id) {
-//     if (payload_length < 3) {
-//         send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Image Chunk");
-//         return nullptr;
-//     }
+MediaContainer* SPIDriver::handle_image_chunk(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+    if (payload_length < 3) {
+        send_error(message_id, ErrorCode::INVALID_FORMAT, "Payload too short for Image Chunk");
+        return nullptr;
+    }
 
-//     uint8_t image_id = payload[0];
-//     uint16_t chunk_number = bytes_to_uint16(payload[1], payload[2]);
-//     size_t chunk_data_length = payload_length - 3;
-//     uint8_t* chunk_data = &payload[3];
+    uint8_t image_id = payload[0];
+    uint16_t chunk_number = bytes_to_uint16(payload[1], payload[2]);
+    size_t chunk_data_length = payload_length - 3;
+    uint8_t* chunk_data = &payload[3];
 
-//     auto it = ongoing_transfers.find(image_id);
-//     if (it == ongoing_transfers.end()) {
-//         send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID not found for chunk");
-//         return nullptr;
-//     }
+    auto it = ongoing_transfers.find(image_id);
+    if (it == ongoing_transfers.end()) {
+        Serial.println("Image ID Not Found!");
+        send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID not found for chunk");
+        return nullptr;
+    }
 
-//     Image* image = static_cast<Image*>(it->second);
-//     image->add_chunk(chunk_data, chunk_data_length);
+    Image* image = static_cast<Image*>(it->second);
+    image->add_chunk(chunk_data, chunk_data_length);
 
-//     send_ack(message_id, ErrorCode::SUCCESS);
-//     return nullptr;
-// }
+    send_ack(message_id, ErrorCode::SUCCESS);
+    return nullptr;
+}
 
-// MediaContainer* SPIDriver::handle_image_transfer_end(uint8_t* payload, size_t payload_length, uint8_t message_id) {
-//     if (payload_length != 1) {
-//         send_error(message_id, ErrorCode::INVALID_FORMAT, "Invalid payload length for Image Transfer End");
-//         return nullptr;
-//     }
+MediaContainer* SPIDriver::handle_image_transfer_end(uint8_t* payload, size_t payload_length, uint8_t message_id) {
+    if (payload_length != 1) {
+        send_error(message_id, ErrorCode::INVALID_FORMAT, "Invalid payload length for Image Transfer End");
+        Serial.println("Invalid Payload Length for img end!");
+        return nullptr;
+    }
 
-//     uint8_t image_id = payload[0];
-//     auto it = ongoing_transfers.find(image_id);
-//     if (it == ongoing_transfers.end()) {
-//         send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID not found for transfer end");
-//         return nullptr;
-//     }
+    uint8_t image_id = payload[0];
+    auto it = ongoing_transfers.find(image_id);
+    if (it == ongoing_transfers.end()) {
+        send_error(message_id, ErrorCode::IMAGE_ID_MISMATCH, "Image ID not found for transfer end");
+        Serial.println("Image ID not found!");
+        return nullptr;
+    }
+    
+    Image* image = static_cast<Image*>(it->second);
+    ongoing_transfers.erase(it);
 
-//     Image* image = static_cast<Image*>(it->second);
-//     ongoing_transfers.erase(it);
-
-//     send_ack(message_id, ErrorCode::SUCCESS);
-//     return image;   // Return the completed image for display
-// }
+    send_ack(message_id, ErrorCode::SUCCESS);
+    return image;   // Return the completed image for display
+}
 
 // MediaContainer* SPIDriver::handle_option_list(uint8_t* payload, size_t payload_length, uint8_t message_id) {
 //     if (payload_length < 2) {
