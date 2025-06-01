@@ -9,28 +9,9 @@
 #include <Arduino_GFX_Library.h>
 #include <JPEGDEC.h>
 
+#include "constants.h"
+
 namespace dice {
-
-// Enums for Media Status
-enum class MediaStatus : uint8_t { NOT_RECEIVED = 0, DECODING = 2, READY = 3, DISPLAYING = 4, EXPIRED = 5 };
-
-// Enums for Media Types
-enum class MediaType : uint8_t { TEXT = 0, TEXTGROUP = 1, IMAGE = 2, OPTION = 3, GIF = 5, CTLR = 255 };
-
-// Enums for Image Formats
-enum class ImageFormat : uint8_t { NOIMG = 0, JPEG=1, RGB565=2, RGB222=3};
-
-enum class ImageResolution: uint8_t {SQ480=1, SQ240=2};
-
-// Enums for Font IDs
-enum class FontID : uint8_t { NOTEXT=0, TF = 1, ARABIC=2, CHINESE=3, CYRILLIC=4, DEVANAGARI=5};
-
-// enum class PrettyColor : uint32_t { DARKGREY = 0x636363, BABYBLUE = 0xbee3f5, BLACK = 0x000000, WHITE = 0xffffff };
-
-// enum class Command : uint8_t {BACKLIGHT_OFF =1, BACKLIGHT_ON=2, OPTION_ID=3, };
-
-// Screen Buffer Size
-constexpr size_t SCREEN_PXLCNT = 480 * 480;
 
 class MediaContainer {
 protected:
