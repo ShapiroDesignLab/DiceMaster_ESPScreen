@@ -10,6 +10,7 @@
 #include <JPEGDEC.h>
 
 #include "constants.h"
+using namespace DConstant;
 
 namespace dice {
 

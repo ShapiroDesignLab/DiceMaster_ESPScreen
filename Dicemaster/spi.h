@@ -7,8 +7,9 @@
 
 #include <ESP32DMASPISlave.h>
 #include "Media.h"
+#include "protocol.h"
 
-namespace dice {
+namespace DSPI {
 
 // SPI Buffer Sizes
 constexpr size_t SPI_MOSI_BUFFER_SIZE = 2048;  // Adjust as needed
@@ -29,24 +30,24 @@ private:
     // ───────── Helpers to emit ACK / ERROR packets (using protocol.h) ────────
     void sendAck(uint8_t msgId, ErrorCode code = ErrorCode::SUCCESS)
     {
-        Protocol::Ack ack{code};
-        auto pkt = Protocol::encode(ack, msgId);   // returns std::vector<uint8_t>
+        DProtocol::Ack ack{code};
+        auto pkt = DProtocol::encode(ack, msgId);   // returns std::vector<uint8_t>
         slave.queue(pkt.data(), nullptr, pkt.size());
     }
     void sendError(uint8_t msgId, ErrorCode code, const char* txt)
     {
-        Protocol::Error err{code, txt};
-        auto pkt = Protocol::encode(err, msgId);
+        DProtocol::Error err{code, txt};
+        auto pkt = DProtocol::encode(err, msgId);
         slave.queue(pkt.data(), nullptr, pkt.size());
     }
 
     // ───────── Message‑type specific handlers (return MediaContainer or NULL)
-    MediaContainer* handle(const Protocol::TextBatch&   tb);
-    MediaContainer* handle(const Protocol::ImageStart&  is);
-    MediaContainer* handle(const Protocol::ImageChunk&  ic);
-    MediaContainer* handle(const Protocol::ImageEnd&    ie);
-    MediaContainer* handle(const Protocol::OptionList&  ol);
-    MediaContainer* handle(const Protocol::OptionSelectionUpdate& os);
+    MediaContainer* handle(const DProtocol::TextBatch&   tb);
+    MediaContainer* handle(const DProtocol::ImageStart&  is);
+    MediaContainer* handle(const DProtocol::ImageChunk&  ic);
+    MediaContainer* handle(const DProtocol::ImageEnd&    ie);
+    MediaContainer* handle(const DProtocol::OptionList&  ol);
+    MediaContainer* handle(const DProtocol::OptionSelectionUpdate& os);
 
 public:
     SPIDriver();
@@ -78,88 +79,137 @@ inline void SPIDriver::queueTransaction()
     }
 }
 
+
+// ───────────────────────── queue-/poll helpers ────────────────────────
 inline std::vector<MediaContainer*> SPIDriver::poll()
 {
     std::vector<MediaContainer*> ready;
 
     if (!slave.hasTransactionsCompletedAndAllResultsReady(QUEUE_SIZE))
-        return ready;                               // nothing yet
+        return ready;
 
-    const auto sizes = slave.numBytesReceivedAll();
+    const std::vector<size_t> sizes = slave.numBytesReceivedAll();
     size_t offset = 0;
 
-    for (size_t sz : sizes) {
+    for (size_t sz : sizes)
+    {
         const uint8_t* buf = dma_rx_buf + offset;
         offset += sz;
-        try {
-            auto msg = Protocol::decodeMessage(buf, sz);
-            uint8_t id = msg.header.id;
 
-            // ─── Dispatch via std::visit on variant payload ────────────────
-            std::visit([&](auto&& payload){
-                using T = std::decay_t<decltype(payload)>;
-                MediaContainer* out = nullptr;
-                if constexpr (std::is_same_v<T, Protocol::TextBatch>)              out = handle(payload);
-                else if constexpr (std::is_same_v<T, Protocol::ImageStart>)        out = handle(payload);
-                else if constexpr (std::is_same_v<T, Protocol::ImageChunk>)        out = handle(payload);
-                else if constexpr (std::is_same_v<T, Protocol::ImageEnd>)          out = handle(payload);
-                else if constexpr (std::is_same_v<T, Protocol::OptionList>)        out = handle(payload);
-                else if constexpr (std::is_same_v<T, Protocol::OptionSelectionUpdate>) out = handle(payload);
-                // Back‑light & ACK/ERROR are handled immediately (no container)
-                else if constexpr (std::is_same_v<T, Protocol::BacklightOn>)  /*turn on*/;
-                else if constexpr (std::is_same_v<T, Protocol::BacklightOff>) /*turn off*/;
-                else if constexpr (std::is_same_v<T, Protocol::Ack>)               /*ignore*/;
-                else if constexpr (std::is_same_v<T, Protocol::Error>)             /*log*/;
+        DProtocol::Message msg;
+        DProtocol::ErrorCode ec = DProtocol::decodeMessage(buf, sz, msg);
 
-                if (out) ready.push_back(out);
-                sendAck(id);   // generic success ACK
-            }, msg.payload);
+        if (ec != DProtocol::SUCCESS)            // parsing failed
+        {
+            sendError(buf[2] /*msgId*/, ec, "decode");
+            continue;
         }
-        catch(const std::exception& e){
-            sendError(buf[2] /*msgId*/, ErrorCode::INVALID_FORMAT, e.what());
+
+        uint8_t id = msg.hdr.id;
+        MediaContainer* out = nullptr;
+
+        switch (msg.payload.tag)
+        {
+            case DProtocol::TAG_TEXT_BATCH:
+                out = handle(msg.payload.u.textBatch);
+                break;
+
+            case DProtocol::TAG_IMAGE_START:
+                out = handle(msg.payload.u.imageStart);
+                break;
+
+            case DProtocol::TAG_IMAGE_CHUNK:
+                out = handle(msg.payload.u.imageChunk);
+                break;
+
+            case DProtocol::TAG_IMAGE_END:
+                out = handle(msg.payload.u.imageEnd);
+                break;
+
+            case DProtocol::TAG_OPTION_LIST:
+                out = handle(msg.payload.u.optionList);
+                break;
+
+            case DProtocol::TAG_OPTION_UPDATE:
+                out = handle(msg.payload.u.optionUpdate);
+                break;
+
+            case DProtocol::TAG_BACKLIGHT_ON:
+                /* turn back-light on */;
+                break;
+
+            case DProtocol::TAG_BACKLIGHT_OFF:
+                /* turn back-light off */;
+                break;
+
+            case DProtocol::TAG_ACK:     /* host ACK – ignore */  break;
+            case DProtocol::TAG_ERROR:   /* host error – log  */  break;
+
+            default:
+                sendError(id, ErrorCode::UNKNOWN_MSG_TYPE, "tag?");
+                break;
         }
+
+        if (out) ready.push_back(out);
+        sendAck(id);                               // generic ACK for every good packet
     }
     return ready;
 }
 
-
-
-// ──────────────────────────── Per‑type handlers ─────────────────────────────
-
-inline MediaContainer* SPIDriver::handle(const Protocol::TextBatch& tb)
+// ─────────────────────────── TextBatch handler ────────────────────────
+inline MediaContainer* SPIDriver::handle(const DProtocol::TextBatch& tb)
 {
-    auto* group = new TextGroup(0, tb.bg_color, tb.font_color);
-    for (const auto& it : tb.items) {
-        Text* t = new Text(String((const char*)it.text.data(), it.text.size()),
-                           0, static_cast<FontID>(it.font_id), it.x, it.y);
+    auto* group = new TextGroup(0, tb.bgColor, tb.fontColor);
+
+    for (uint8_t i = 0; i < tb.itemCount; ++i)
+    {
+        const DProtocol::TextItem& it = tb.items[i];
+        Text* t = new Text(
+            String(reinterpret_cast<const char*>(it.text), it.len),
+            0,
+            static_cast<FontID>(it.fontId),
+            it.x,
+            it.y
+        );
         group->add_member(t);
     }
     return group;
 }
 
-inline MediaContainer* SPIDriver::handle(const Protocol::ImageStart& is)
+// ─────────────────────────── ImageStart handler ───────────────────────
+inline MediaContainer* SPIDriver::handle(const DProtocol::ImageStart& is)
 {
-    if (ongoing.count(is.img_id)) {
+    if (ongoing_transfers.count(is.imgId))
+    {
         sendError(/*msgId=*/0, ErrorCode::IMAGE_ID_MISMATCH, "img id busy");
         return nullptr;
     }
-    Image* img = new Image(is.img_id, is.fmt, is.res, is.total_size, is.delay_ms);
-    ongoing[is.img_id] = img;   // wait for chunks
+
+    ImageFormat     fmt = static_cast<ImageFormat>(is.fmtRes >> 4);
+    ImageResolution res = static_cast<ImageResolution>(is.fmtRes & 0x0F);
+
+    Image* img = new Image(is.imgId, fmt, res, is.totalSize, is.delayMs);
+    ongoing_transfers[is.imgId] = img;    // wait for chunks
     return nullptr;
 }
 
-inline MediaContainer* SPIDriver::handle(const Protocol::ImageChunk& ic)
+// ─────────────────────────── ImageChunk handler ───────────────────────
+inline MediaContainer* SPIDriver::handle(const DProtocol::ImageChunk& ic)
 {
-    auto it = ongoing.find(ic.img_id);
-    if (it == ongoing.end()) {
+    auto it = ongoing_transfers.find(ic.imgId);
+    if (it == ongoing_transfers.end())
+    {
         sendError(/*msgId=*/0, ErrorCode::IMAGE_ID_MISMATCH, "chunk w/o start");
         return nullptr;
     }
-    static_cast<Image*>(it->second)->add_chunk(ic.data.data(), ic.data.size());
+
+    static_cast<Image*>(it->second)->add_chunk(ic.data, ic.length);
     return nullptr;
 }
 
-inline MediaContainer* SPIDriver::handle(const Protocol::ImageEnd& ie)
+// ImageEnd & option handlers you posted earlier remain valid
+
+inline MediaContainer* SPIDriver::handle(const DProtocol::ImageEnd& ie)
 {
     auto it = ongoing.find(ie.img_id);
     if (it == ongoing.end()) {
@@ -171,13 +221,13 @@ inline MediaContainer* SPIDriver::handle(const Protocol::ImageEnd& ie)
     return complete;         // return ready‑to‑display image
 }
 
-inline MediaContainer* SPIDriver::handle(const Protocol::OptionList& ol)
+inline MediaContainer* SPIDriver::handle(const DProtocol::OptionList& ol)
 {
     // TODO: convert to your UI Option container; placeholder logs only
     (void)ol; return nullptr;
 }
 
-inline MediaContainer* SPIDriver::handle(const Protocol::OptionSelectionUpdate& os)
+inline MediaContainer* SPIDriver::handle(const DProtocol::OptionSelectionUpdate& os)
 {
     // TODO: apply selection; placeholder
     (void)os; return nullptr;

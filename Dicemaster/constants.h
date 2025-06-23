@@ -6,7 +6,7 @@
 #include <map>
 
 
-namespace dice {
+namespace DConstant {
 
 // Enums for Media Status
 enum class MediaStatus : uint8_t {
@@ -50,12 +50,12 @@ enum class FontID : uint8_t {
     DEVANAGARI=5
 };
 
-enum class PrettyColor : uint32_t {
-    DARKGREY = 0x636363,
-    BABYBLUE = 0xbee3f5,
-    BLACK = 0x000000,
-    WHITE = 0xffffff
-};
+// enum class PrettyColor : uint32_t {
+//     DARKGREY = 0x636363,
+//     BABYBLUE = 0xbee3f5,
+//     BLACK = 0x000000,
+//     WHITE = 0xffffff
+// };
 
 enum class Command : uint8_t {
     BACKLIGHT_OFF =1,
@@ -99,6 +99,6 @@ enum class ErrorCode : uint8_t {
 // SPI Protocol constants
 constexpr uint8_t SOF_MARKER = 0x7E;
 
-}
+} // namespace DConstant
 
 #endif

@@ -18,120 +18,200 @@
 
 #include "constants.h"
 
-// ────────────────────────────────── Ensure SOF_MARKER is available
-#ifndef SOF_MARKER
-static constexpr uint8_t SOF_MARKER = 0x7E;   // fallback if not defined elsewhere
-#endif
+// ───────────────────────  Namespace & basic enums  ─────────────────────
+namespace DProtocol {
 
-namespace Protocol {      // Dice
+// ----------------------------------------------------------------------
+//  Public enums & constants   (exactly the same numeric values you gave)
+// ----------------------------------------------------------------------
+enum { SOF_MARKER = 0x7E };
 
-// ─────────────────────────────────────────────── Low‑level helpers (BigEndian encode)
-inline void writeBE(std::vector<uint8_t>& buf, uint32_t value, size_t bytes)
+// ─────────────────────────────  Structures  ────────────────────────────
+struct MessageHeader {
+    uint8_t  sof;          // always SOF_MARKER
+    MessageType type;
+    uint8_t  id;
+    uint16_t payloadLen;   // big-endian
+};
+
+// -------------------------  Text batch payload -------------------------
+struct TextItem {
+    uint16_t x, y;
+    uint8_t  fontId;
+    uint8_t  len;          // length of text[]
+    uint8_t  text[255];    // UTF-8 (len bytes used)
+};
+
+struct TextBatch {
+    uint16_t bgColor;
+    uint16_t fontColor;
+    uint8_t  itemCount;
+    TextItem items[10];     // max 10 lines; adjust to taste
+};
+
+// -------------------------  Image/GIF payloads -------------------------
+struct ImageStart {
+    uint8_t  imgId;
+    uint8_t  fmtRes;        // 4-bit format | 4-bit res
+    uint8_t  delayMs;
+    uint32_t totalSize;     // 24-bit in packet, 32-bit here
+    uint8_t  numChunks;
+};
+
+struct ImageChunk {
+    uint8_t  imgId;
+    uint8_t  chunkId;
+    uint32_t offset;        // 24-bit for image, 32-bit for GIF
+    uint16_t length;
+    const uint8_t* data;    // pointer into original buffer
+};
+
+struct ImageEnd { uint8_t imgId; };
+
+// -------------------------  Option list payloads ----------------------
+struct OptionEntry {
+    uint8_t  selected;
+    uint16_t x, y;
+    uint8_t  len;
+    char     text[255];
+};
+
+struct OptionList {
+    uint8_t entryCount;
+    OptionEntry entries[12];   // adjust size as needed
+};
+
+struct OptionSelectionUpdate { uint8_t index; };
+
+// -------------------------  Control / status --------------------------
+struct Ack   { ErrorCode status; };
+struct Error { ErrorCode code; uint8_t len; char text[255]; };
+
+// ────────────────────────  Tagged-union wrapper  ───────────────────────
+enum PayloadTag : uint8_t {
+    TAG_NONE,
+    TAG_TEXT_BATCH,
+    TAG_IMAGE_START,
+    TAG_IMAGE_CHUNK,
+    TAG_IMAGE_END,
+    TAG_OPTION_LIST,
+    TAG_OPTION_UPDATE,
+    TAG_BACKLIGHT_ON,
+    TAG_BACKLIGHT_OFF,
+    TAG_ACK,
+    TAG_ERROR
+};
+
+struct Payload {
+    PayloadTag tag;
+    union {
+        TextBatch              textBatch;
+        ImageStart             imageStart;
+        ImageChunk             imageChunk;
+        ImageEnd               imageEnd;
+        OptionList             optionList;
+        OptionSelectionUpdate  optionUpdate;
+        Ack                    ack;
+        Error                  error;
+    } u;
+};
+
+// A decoded message: header + payload
+struct Message {
+    MessageHeader hdr;
+    Payload       payload;
+};
+
+// ──────────────────  Internal little helpers (BE)  ────────────────────
+inline void writeBE(uint8_t* dst, uint32_t val, uint8_t sz)
 {
-    for (size_t i = 0; i < bytes; ++i)
-        buf.push_back(static_cast<uint8_t>(value >> (8 * (bytes - i - 1))));
+    for(uint8_t i=0;i<sz;++i)
+        dst[i] = (uint8_t)(val >> (8*(sz-i-1)));
 }
-inline uint32_t readBE(const uint8_t* src, size_t bytes)
+
+inline uint32_t readBE(const uint8_t* src, uint8_t sz)
 {
     uint32_t v = 0;
-    for (size_t i = 0; i < bytes; ++i) v = (v << 8) | src[i];
+    for(uint8_t i=0;i<sz;++i) v = (v<<8)|src[i];
     return v;
 }
 
-// ───────────────────────────────────────── Header structure & helpers
-struct MessageHeader {
-    MessageType type{};      // <- comes from user enum
-    uint8_t     id   = 0;
-    uint16_t    payloadLen = 0;   // big‑endian length field in raw packet
-};
-
-// Encode header inforomation into vector buffer
-inline std::vector<uint8_t> encodeHeader(MessageType t, uint8_t id, uint16_t plen)
+// ─────────────────────────  HEADER EN/DE-CODE  ────────────────────────
+inline void encodeHeader(uint8_t* out, MessageType t, uint8_t id, uint16_t len)
 {
-    std::vector<uint8_t> out;
-    out.reserve(5);
-    out.push_back(SOF_MARKER);
-    out.push_back(static_cast<uint8_t>(t));
-    out.push_back(id);
-    writeBE(out, plen, 2);
+    out[0] = SOF_MARKER;
+    out[1] = t;
+    out[2] = id;
+    writeBE(out+3, len, 2);
+}
+
+inline ErrorCode decodeHeader(const uint8_t* buf, size_t sz, MessageHeader& h)
+{
+    if(sz < 5)            return DConstant::ErrorCode::INVALID_FORMAT;
+    if(buf[0] != SOF_MARKER) return DConstant::ErrorCode::INVALID_FORMAT;
+    h.sof = buf[0];
+    h.type = static_cast<MessageType>(buf[1]);
+    h.id   = buf[2];
+    h.payloadLen = (uint16_t)((buf[3]<<8)|buf[4]);
+    if(h.payloadLen + 5 != sz) return PAYLOAD_LENGTH_MISMATCH;
+    return SUCCESS;
+}
+
+// ─────────────────────  PER-TYPE ENCODERS (examples)  ──────────────────
+// Only a couple shown; add the rest as needed.
+// All return std::vector<uint8_t> ready to send.
+
+inline std::vector<uint8_t> encode(const TextBatch& tb, uint8_t msgId)
+{
+    std::vector<uint8_t> p;
+    p.reserve(5 + tb.itemCount*16);
+
+    // group header
+    p.push_back(uint8_t(tb.bgColor>>8)); p.push_back(uint8_t(tb.bgColor));
+    p.push_back(uint8_t(tb.fontColor>>8)); p.push_back(uint8_t(tb.fontColor));
+    p.push_back(tb.itemCount);
+
+    // items
+    for(uint8_t i=0;i<tb.itemCount;++i){
+        const TextItem& it = tb.items[i];
+        p.push_back(uint8_t(it.x>>8)); p.push_back(uint8_t(it.x));
+        p.push_back(uint8_t(it.y>>8)); p.push_back(uint8_t(it.y));
+        p.push_back(it.fontId);
+        p.push_back(it.len);
+        p.insert(p.end(), it.text, it.text+it.len);
+    }
+
+    std::vector<uint8_t> out(5);                // header placeholder
+    encodeHeader(out.data(), TEXT_BATCH, msgId, p.size());
+    out.insert(out.end(), p.begin(), p.end());
     return out;
 }
 
+// (Add encode() overloads for other structs analogously)
 
-// Decode header from buffer
-inline MessageHeader decodeHeader(const uint8_t* buf, size_t len)
+// ─────────────────────  PER-TYPE DECODERS (examples)  ──────────────────
+inline ErrorCode decodeTextBatch(const uint8_t* p, size_t len, TextBatch& tb)
 {
-    if (len < 5) throw std::runtime_error("buffer < header");
-    if (buf[0] != SOF_MARKER) throw std::runtime_error("invalid SOF");
-    MessageHeader h;
-    h.type = static_cast<MessageType>(buf[1]);
-    h.id   = buf[2];
-    h.payloadLen = static_cast<uint16_t>(buf[3] << 8 | buf[4]);
-    return h;
-}
+    if(len < 5) return INVALID_FORMAT;
+    tb.bgColor   = readBE(p,2); tb.fontColor = readBE(p+2,2);
+    tb.itemCount = p[4]; p+=5; len-=5;
+    if(tb.itemCount > 10) return OUT_OF_MEMORY;
 
-// ────────────────────────────────────────────── Payload data structures
-struct TextItem { uint16_t x,y; uint8_t fontId; std::vector<uint8_t> text; };
-struct TextBatch { uint16_t bgColor, fontColor; std::vector<TextItem> items; };
-
-enum class ImageFormat : uint8_t;        // use enums from user header
-enum class ImageResolution : uint8_t;
-struct ImageStart  { uint8_t imgId; ImageFormat fmt; ImageResolution res; uint8_t delay; uint32_t total; uint8_t chunks; };
-struct ImageChunk  { uint8_t imgId, chunkId; uint32_t offset; std::vector<uint8_t> data; };
-struct ImageEnd    { uint8_t imgId; };
-
-struct OptionEntry { bool sel; uint16_t x,y; std::string txt; };
-struct OptionList  { std::vector<OptionEntry> entries; };
-struct OptionSelectionUpdate { uint8_t index; };
-
-struct BacklightOn  { };   // no payload
-struct BacklightOff { };
-
-struct Ack   { ErrorCode status; };
-struct Error { ErrorCode code; std::string desc; };
-
-using Payload = std::variant< TextBatch,
-                              ImageStart, ImageChunk, ImageEnd,
-                              OptionList, OptionSelectionUpdate,
-                              ImageStart /*GIF start*/, ImageChunk /*GIF frame*/, ImageEnd /*GIF end*/,
-                              BacklightOn, BacklightOff,
-                              Ack, Error >;
-struct Message { MessageHeader header; Payload payload; };
-
-// ─────────────────────────────────────────── TEXT_BATCH encode/decode
-inline std::vector<uint8_t> encode(const TextBatch& tb, uint8_t id)
-{
-    std::vector<uint8_t> pl;
-    writeBE(pl, tb.bgColor, 2);
-    writeBE(pl, tb.fontColor, 2);
-    if (tb.items.size() > 255) throw std::runtime_error("too many text items");
-    pl.push_back(static_cast<uint8_t>(tb.items.size()));
-    for (const auto& item : tb.items) {
-        writeBE(pl, item.x, 2); writeBE(pl, item.y, 2);
-        pl.push_back(item.fontId);
-        if (item.text.size() > 255) throw std::runtime_error("text >255");
-        pl.push_back(static_cast<uint8_t>(item.text.size()));
-        pl.insert(pl.end(), item.text.begin(), item.text.end());
+    for(uint8_t i=0;i<tb.itemCount;++i){
+        if(len < 6) return INVALID_FORMAT;
+        TextItem& it = tb.items[i];
+        it.x = readBE(p,2); it.y = readBE(p+2,2);
+        it.fontId = p[4]; it.len = p[5];
+        p+=6; len-=6;
+        if(len < it.len) return INVALID_FORMAT;
+        memcpy(it.text, p, it.len);
+        p+=it.len; len-=it.len;
     }
-    auto hdr = encodeHeader(MessageType::TEXT_BATCH, id, pl.size());
-    hdr.insert(hdr.end(), pl.begin(), pl.end());
-    return hdr;
+    return (len==0) ? SUCCESS : INVALID_FORMAT;
 }
-inline TextBatch decodeTextBatch(const uint8_t* p, size_t len)
-{
-    if (len < 5) throw std::runtime_error("TB <5");
-    TextBatch tb; tb.bgColor = readBE(p,2); tb.fontColor = readBE(p+2,2);
-    uint8_t cnt = p[4]; size_t off = 5;
-    while (cnt--) {
-        if (off+6 > len) throw std::runtime_error("TB meta truncated");
-        TextItem it; it.x = readBE(p+off,2); it.y = readBE(p+off+2,2); it.fontId = p[off+4];
-        uint8_t tl = p[off+5]; off += 6;
-        if (off+tl > len) throw std::runtime_error("TB text truncated");
-        it.text.assign(p+off, p+off+tl); off += tl; tb.items.push_back(std::move(it));
-    }
-    if (off!=len) throw std::runtime_error("TB leftover");
-    return tb;
-}
+
+// (Add decodeImageStart, decodeImageChunk… similarly)
+
 
 // ───────────────────────────────────────── IMAGE helpers (JPEG + GIF)
 inline uint8_t packFmtRes(ImageFormat f, ImageResolution r){
@@ -196,27 +276,127 @@ inline Ack decodeAck(const uint8_t* p,size_t l){if(l!=1)throw std::runtime_error
 inline std::vector<uint8_t> encode(const Error& e,uint8_t id){if(e.desc.size()>255)throw std::runtime_error("err txt>255");std::vector<uint8_t> pl{static_cast<uint8_t>(e.code),static_cast<uint8_t>(e.desc.size())};pl.insert(pl.end(),e.desc.begin(),e.desc.end());auto hdr=encodeHeader(MessageType::ERROR,id,pl.size());hdr.insert(hdr.end(),pl.begin(),pl.end());return hdr;}
 inline Error decodeError(const uint8_t* p,size_t l){if(l<2)throw std::runtime_error("ERR short");uint8_t tl=p[1];if(2+tl!=l)throw std::runtime_error("ERR len");return Error{static_cast<ErrorCode>(p[0]),std::string(reinterpret_cast<const char*>(p+2),tl)};}
 
-// ───────────────────────────────────────── High‑level dispatch
-inline Message decodeMessage(const uint8_t* buf,size_t len)
+
+// ─────────────────────  HIGH-LEVEL DISPATCH DECODER  ───────────────────
+// ─────────────────────  HIGH-LEVEL DISPATCH DECODER  ───────────────────
+inline ErrorCode decodeMessage(const uint8_t* buf, size_t sz, Message& msg)
 {
-    auto hdr=decodeHeader(buf,len); if(len<5+hdr.payloadLen) throw std::runtime_error("buf too short"); const uint8_t* p=buf+5;
-    switch(hdr.type){
-        case MessageType::TEXT_BATCH:              return {hdr,decodeTextBatch(p,hdr.payloadLen)};
-        case MessageType::IMAGE_TRANSFER_START:    return {hdr,decodeImageStart(p,hdr.payloadLen)};
-        case MessageType::IMAGE_CHUNK:             return {hdr,decodeImageChunk(p,hdr.payloadLen,false)};
-        case MessageType::IMAGE_TRANSFER_END:      return {hdr,decodeImageEnd(p,hdr.payloadLen)};
-        case MessageType::GIF_TRANSFER_START:      return {hdr,decodeImageStart(p,hdr.payloadLen)};
-        case MessageType::GIF_FRAME:               return {hdr,decodeImageChunk(p,hdr.payloadLen,true)};
-        case MessageType::GIF_TRANSFER_END:        return {hdr,decodeImageEnd(p,hdr.payloadLen)};
-        case MessageType::OPTION_LIST:             return {hdr,decodeOptionList(p,hdr.payloadLen)};
-        case MessageType::OPTION_SELECTION_UPDATE: return {hdr,decodeOptionSelectionUpdate(p,hdr.payloadLen)};
-        case MessageType::BACKLIGHT_ON:            return {hdr,BacklightOn{}};
-        case MessageType::BACKLIGHT_OFF:           return {hdr,BacklightOff{}};
-        case MessageType::ACK:                     return {hdr,decodeAck(p,hdr.payloadLen)};
-        case MessageType::ERROR:                   return {hdr,decodeError(p,hdr.payloadLen)};
-        default: throw std::runtime_error("unknown MessageType");
+    ErrorCode ec = decodeHeader(buf, sz, msg.hdr);
+    if (ec != SUCCESS) return ec;
+
+    const uint8_t* p   = buf + 5;          // start of payload
+    size_t         len = msg.hdr.payloadLen;
+    msg.payload.tag    = TAG_NONE;         // clear
+
+    switch (msg.hdr.type)
+    {
+    // ─────────────── TEXT_BATCH ───────────────
+    case MessageType::TEXT_BATCH:
+        msg.payload.tag = TAG_TEXT_BATCH;
+        return decodeTextBatch(p, len, msg.payload.u.textBatch);
+
+    // ───────────── IMAGE_TRANSFER_START ───────
+    case MessageType::IMAGE_TRANSFER_START:
+    case MessageType::GIF_TRANSFER_START:
+        if (len != 7) return INVALID_FORMAT;
+        msg.payload.tag = TAG_IMAGE_START;
+        {
+            ImageStart& s  = msg.payload.u.imageStart;
+            s.imgId        = p[0];
+            s.fmtRes       = p[1];
+            s.delayMs      = p[2];
+            s.totalSize    = (uint32_t(p[3]) << 16) |
+                             (uint32_t(p[4]) <<  8) | p[5];
+            s.numChunks    = p[6];
+        }
+        return SUCCESS;
+
+    // ────────────── IMAGE_CHUNK / GIF_FRAME ───
+    case MessageType::IMAGE_CHUNK:
+    case MessageType::GIF_FRAME:
+        {
+            const bool gif = (msg.hdr.type == MessageType::GIF_FRAME);
+            const uint8_t offBytes = gif ? 4 : 3;
+            const size_t  meta     = 2 + offBytes + 2;     // id,id,off,len
+            if (len < meta) return INVALID_FORMAT;
+
+            msg.payload.tag = TAG_IMAGE_CHUNK;
+            ImageChunk& c   = msg.payload.u.imageChunk;
+
+            c.imgId   = p[0];
+            c.chunkId = p[1];
+            c.offset  = readBE(p + 2, offBytes);
+            c.length  = uint16_t(readBE(p + 2 + offBytes, 2));
+            if (meta + c.length != len) return PAYLOAD_LENGTH_MISMATCH;
+
+            c.data = p + meta;            // pointer into original buffer
+            return SUCCESS;
+        }
+
+    // ────────────── IMAGE_TRANSFER_END / GIF_END ───
+    case MessageType::IMAGE_TRANSFER_END:
+    case MessageType::GIF_TRANSFER_END:
+        if (len != 1) return INVALID_FORMAT;
+        msg.payload.tag         = TAG_IMAGE_END;
+        msg.payload.u.imageEnd  = ImageEnd{ p[0] };
+        return SUCCESS;
+
+    // ─────────────── OPTION_LIST ───────────────
+    case MessageType::OPTION_LIST:
+        msg.payload.tag = TAG_OPTION_LIST;
+        return decodeOptionList(p, len, msg.payload.u.optionList);    // implement like TextBatch
+
+    // ───────────── OPTION_SELECTION_UPDATE ─────
+    case MessageType::OPTION_SELECTION_UPDATE:
+        if (len != 1) return INVALID_FORMAT;
+        msg.payload.tag                 = TAG_OPTION_UPDATE;
+        msg.payload.u.optionUpdate.index = p[0];
+        return SUCCESS;
+
+    // ─────────────── BACKLIGHT ON / OFF ────────
+    case MessageType::BACKLIGHT_ON:
+        if (len) return INVALID_FORMAT;
+        msg.payload.tag = TAG_BACKLIGHT_ON;
+        return SUCCESS;
+
+    case MessageType::BACKLIGHT_OFF:
+        if (len) return INVALID_FORMAT;
+        msg.payload.tag = TAG_BACKLIGHT_OFF;
+        return SUCCESS;
+
+    // ───────────────────── ACK ─────────────────
+    case MessageType::ACK:
+        if (len != 1) return INVALID_FORMAT;
+        msg.payload.tag          = TAG_ACK;
+        msg.payload.u.ack.status = static_cast<ErrorCode>(p[0]);
+        return SUCCESS;
+
+    // ──────────────────── ERROR ───────────────
+    case MessageType::ERROR:
+        if (len < 2) return INVALID_FORMAT;
+        {
+            uint8_t tlen = p[1];
+            if (2 + tlen != len || tlen > sizeof(msg.payload.u.error.text))
+                return PAYLOAD_LENGTH_MISMATCH;
+
+            msg.payload.tag              = TAG_ERROR;
+            msg.payload.u.error.code     = static_cast<ErrorCode>(p[0]);
+            msg.payload.u.error.len      = tlen;
+            memcpy(msg.payload.u.error.text, p + 2, tlen);
+        }
+        return SUCCESS;
+
+    // ───────────────── UNKNOWN TYPE ────────────
+    default:
+        return UNKNOWN_MSG_TYPE;
     }
 }
+
+
+}
+
+#endif
+
 
 
 // // SUCCESS!!!
@@ -245,6 +425,3 @@ inline Message decodeMessage(const uint8_t* buf,size_t len)
 //   return msg_arr;
 // }
 
-}
-
-#endif
