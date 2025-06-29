@@ -207,8 +207,6 @@ int Image::JPEGDraw240(JPEGDRAW* pDraw) {
 
 
 void Image::decode() {
-    Serial.println("[IMAGE] Starting decode for ID " + String(image_id));
-    
     // Check if we still have valid content
     if (content == nullptr || decoded_content == nullptr) {
         Serial.println("[ERROR] Invalid buffers during decode");
@@ -232,14 +230,13 @@ void Image::decode() {
     }
     // Decode
     if (jpeg.openRAM(content, total_size, JPEGDraw)) {
-        Serial.println("[IMAGE] JPEG opened, starting decode");
         jpeg.setUserPointer(this);
         
         // Feed watchdog during decode
         esp_task_wdt_reset();
         
         if (jpeg.decode(0, 0, 0)) {
-            Serial.println("[IMAGE] JPEG decode completed successfully");
+            // JPEG decode completed successfully
         } else {
             Serial.println("[ERROR] JPEG decode failed");
         }
@@ -251,7 +248,6 @@ void Image::decode() {
         // free(content);   // Free original content as it's no longer needed
         // content = nullptr;
         set_status(MediaStatus::READY);
-        Serial.println("[IMAGE] Decode finished for ID " + String(image_id));
     } else {
         Serial.println("[Warning] Bad image file for ID " + String(image_id));
         set_status(MediaStatus::EXPIRED);   // Handle error appropriately
@@ -276,9 +272,6 @@ Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t t
     , decoded_content(nullptr)
     , decodeTaskHandle(nullptr) {
     
-    Serial.println("[IMAGE] Creating image ID " + String(img_id) + " size " + String(total_img_size) + " bytes");
-    Serial.println("[MEMORY] Free PSRAM before alloc: " + String(ESP.getFreePsram()));
-    
     // Allocate content buffer in PSRAM
     content = (uint8_t*) ps_malloc(total_img_size);
     if (content == nullptr) {
@@ -301,20 +294,13 @@ Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t t
     memset(decoded_content, 0, SCREEN_PXLCNT * sizeof(uint16_t));
     
     input_ptr = content;
-    
-    Serial.println("[MEMORY] Free PSRAM after alloc: " + String(ESP.getFreePsram()));
-    Serial.println("[IMAGE] Image buffers allocated successfully");
 }
 
 Image::~Image() {
-    Serial.println("[IMAGE] Destroying image ID " + String(image_id));
-    Serial.println("[MEMORY] Free PSRAM before cleanup: " + String(ESP.getFreePsram()));
-    
     // Stop decoding task if still running
     if (decodeTaskHandle != nullptr) {
         vTaskDelete(decodeTaskHandle);
         decodeTaskHandle = nullptr;
-        Serial.println("[IMAGE] Decode task terminated");
     }
     
     // Free PSRAM buffers
@@ -322,16 +308,12 @@ Image::~Image() {
         free(content);
         content = nullptr;
         input_ptr = nullptr;
-        Serial.println("[IMAGE] Content buffer freed");
     }
     
     if (decoded_content != nullptr) {
         free(decoded_content);
         decoded_content = nullptr;
-        Serial.println("[IMAGE] Decoded buffer freed");
     }
-    
-    Serial.println("[MEMORY] Free PSRAM after cleanup: " + String(ESP.getFreePsram()));
 }
 
 uint16_t* Image::get_img() {

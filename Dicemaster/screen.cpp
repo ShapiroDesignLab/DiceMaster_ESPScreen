@@ -17,10 +17,8 @@ bool Screen::is_next_ready() {
     while (!display_queue.empty() && display_queue.front()->get_status() > MediaStatus::READY) {
         MediaContainer* m = display_queue.front();
         display_queue.pop_front();
-        Serial.println("[SCREEN] Deleting expired media");
         delay(10); // Give any running tasks a moment to complete
         delete m;
-        Serial.println("[SCREEN] Media deleted");
     }
     if (display_queue.empty()) {
         return false;
@@ -192,37 +190,31 @@ void Screen::draw_text(MediaContainer* txt, Rotation rotation) {
         return;
     }
     
-    // Get original coordinates
+    // Get original coordinates from the text object (always specified for 0° rotation)
     uint16_t x = txt->get_cursor_x();
     uint16_t y = txt->get_cursor_y();
     
     // Set font before any operations
     gfx->setFont(txt->get_font());
     
-    // Apply display rotation first
+    // Apply display rotation and transform coordinates using the helper function
     switch (rotation) {
         case Rotation::ROT_90:
             gfx->setRotation(1);
-            // Adjust coordinates for rotated display
-            x = txt->get_cursor_y();
-            y = gfx->height() - txt->get_cursor_x();
+            transform_coordinates(x, y, rotation);
             break;
         case Rotation::ROT_180:
             gfx->setRotation(2);
-            // Adjust coordinates for rotated display
-            x = gfx->width() - txt->get_cursor_x();
-            y = gfx->height() - txt->get_cursor_y();
+            transform_coordinates(x, y, rotation);
             break;
         case Rotation::ROT_270:
             gfx->setRotation(3);
-            // Adjust coordinates for rotated display
-            x = gfx->width() - txt->get_cursor_y();
-            y = txt->get_cursor_x();
+            transform_coordinates(x, y, rotation);
             break;
         case Rotation::ROT_0:
         default:
             gfx->setRotation(0);
-            // No coordinate adjustment needed
+            // No coordinate transformation needed for 0° rotation
             break;
     }
     
@@ -246,10 +238,8 @@ void Screen::display_next() {
     }
     
     if (current_disp != nullptr) {
-        Serial.println("[SCREEN] Deleting current display");
         delay(10); // Give any running tasks a moment
         delete current_disp;
-        Serial.println("[SCREEN] Current display deleted");
     }
 
     current_disp = display_queue.front();
