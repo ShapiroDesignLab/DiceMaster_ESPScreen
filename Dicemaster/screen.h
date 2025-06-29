@@ -6,7 +6,7 @@
 
 #include <Arduino_GFX_Library.h>
 #include <U8g2lib.h>
-#include "Media.h"
+#include "media.h"
 
 
 namespace dice {
@@ -29,10 +29,16 @@ private:
     // Draw image
     void draw_img(MediaContainer* med);
     void draw_bmp565(uint16_t* img);
+    void draw_bmp565_rotated(uint16_t* img, Rotation rotation);
     void draw_color(uint16_t color);
     void draw_textgroup(MediaContainer* tg);
     void draw_text(MediaContainer* txt);
+    void draw_text(MediaContainer* txt, Rotation rotation);
     void display_next();
+    
+    // Rotation helper functions
+    void transform_coordinates(uint16_t& x, uint16_t& y, Rotation rotation);
+    void set_display_rotation(Rotation rotation);
 
 public:
     Screen();

@@ -17,7 +17,10 @@ bool Screen::is_next_ready() {
     while (!display_queue.empty() && display_queue.front()->get_status() > MediaStatus::READY) {
         MediaContainer* m = display_queue.front();
         display_queue.pop_front();
+        Serial.println("[SCREEN] Deleting expired media");
+        delay(10); // Give any running tasks a moment to complete
         delete m;
+        Serial.println("[SCREEN] Media deleted");
     }
     if (display_queue.empty()) {
         return false;
@@ -37,45 +40,217 @@ void Screen::draw_img(MediaContainer* med) {
     }
     uint16_t* img_arr = med->get_img();
     if (img_arr == nullptr) return;
-    draw_bmp565(img_arr);
+    
+    // Get rotation from the image
+    Rotation rotation = med->get_rotation();
+    draw_bmp565_rotated(img_arr, rotation);
 }
 
 void Screen::draw_bmp565(uint16_t* img) {
     gfx->draw16bitRGBBitmap(0, 0, img, gfx->width(), gfx->height());
 }
 
+void Screen::draw_bmp565_rotated(uint16_t* img, Rotation rotation) {
+    if (rotation == Rotation::ROT_0) {
+        // No rotation needed
+        draw_bmp565(img);
+        return;
+    }
+    
+    int width = gfx->width();
+    int height = gfx->height();
+    
+    // For rotation, we need to create a temporary buffer and copy rotated pixels
+    // Use PSRAM for the temporary buffer
+    uint16_t* rotated_buffer = (uint16_t*)ps_malloc(width * height * sizeof(uint16_t));
+    if (!rotated_buffer) {
+        Serial.println("[ERROR] Failed to allocate rotation buffer in PSRAM");
+        // Fallback to non-rotated if memory allocation fails
+        draw_bmp565(img);
+        return;
+    }
+    
+    Serial.println("[ROTATION] Applying rotation " + String(static_cast<uint8_t>(rotation) * 90) + " degrees");
+    
+    // Rotate pixel data based on rotation angle
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int src_x, src_y;
+            
+            switch (rotation) {
+                case Rotation::ROT_90:
+                    src_x = height - 1 - y;
+                    src_y = x;
+                    break;
+                case Rotation::ROT_180:
+                    src_x = width - 1 - x;
+                    src_y = height - 1 - y;
+                    break;
+                case Rotation::ROT_270:
+                    src_x = y;
+                    src_y = width - 1 - x;
+                    break;
+                default:
+                    src_x = x;
+                    src_y = y;
+                    break;
+            }
+            
+            if (src_x >= 0 && src_x < width && src_y >= 0 && src_y < height) {
+                rotated_buffer[y * width + x] = img[src_y * width + src_x];
+            }
+        }
+    }
+    
+    gfx->draw16bitRGBBitmap(0, 0, rotated_buffer, width, height);
+    free(rotated_buffer);
+    Serial.println("[ROTATION] Rotation complete, buffer freed");
+}
+
 void Screen::draw_color(uint16_t color) {
     gfx->fillScreen(color);
+}
+
+// Helper function to transform coordinates based on rotation
+void Screen::transform_coordinates(uint16_t& x, uint16_t& y, Rotation rotation) {
+    int width = gfx->width();
+    int height = gfx->height();
+    uint16_t orig_x = x, orig_y = y;
+    
+    switch (rotation) {
+        case Rotation::ROT_90:
+            // For 90° rotation: transform point around center
+            x = height - orig_y;
+            y = orig_x;
+            break;
+        case Rotation::ROT_180:
+            // For 180° rotation: transform point around center
+            x = width - orig_x;
+            y = height - orig_y;
+            break;
+        case Rotation::ROT_270:
+            // For 270° rotation: transform point around center
+            x = orig_y;
+            y = width - orig_x;
+            break;
+        case Rotation::ROT_0:
+        default:
+            // No transformation needed
+            break;
+    }
+}
+
+// Set U8g2 display rotation
+void Screen::set_display_rotation(Rotation rotation) {
+    // Note: U8g2 rotation values are different from our enum
+    // U8g2: U8G2_R0, U8G2_R1 (90°), U8G2_R2 (180°), U8G2_R3 (270°)
+    uint8_t u8g2_rotation;
+    switch (rotation) {
+        case Rotation::ROT_90:
+            u8g2_rotation = 1;  // U8G2_R1
+            break;
+        case Rotation::ROT_180:
+            u8g2_rotation = 2;  // U8G2_R2
+            break;
+        case Rotation::ROT_270:
+            u8g2_rotation = 3;  // U8G2_R3
+            break;
+        case Rotation::ROT_0:
+        default:
+            u8g2_rotation = 0;  // U8G2_R0
+            break;
+    }
+    
+    // Apply rotation to the display
+    // Note: This would need to be implemented based on your specific display setup
+    // For now, we'll handle rotation through coordinate transformation
 }
 
 void Screen::draw_textgroup(MediaContainer* tg) {
     if (tg->get_media_type() != MediaType::TEXTGROUP){
         return;
     }
-    draw_color(DARKGREY);
+    // Use the TextGroup's background color, not hardcoded DICE_DARKGREY
+    draw_color(tg->get_bg_color());
     gfx->setTextSize(2);
+    // Set the TextGroup's font color
+    gfx->setTextColor(tg->get_font_color());
+
+    // Get rotation for this text group
+    Rotation rotation = tg->get_rotation();
+    set_display_rotation(rotation);
 
     MediaContainer* next = tg->get_next();
     while (next != nullptr) {
-        draw_text(next);
+        draw_text(next, rotation);
         next = tg->get_next();
     }
 }
 
-void Screen::draw_text(MediaContainer* txt) {
+void Screen::draw_text(MediaContainer* txt, Rotation rotation) {
     if (txt->get_media_type() != MediaType::TEXT){
         return;
     }
+    
+    // Get original coordinates
+    uint16_t x = txt->get_cursor_x();
+    uint16_t y = txt->get_cursor_y();
+    
+    // Set font before any operations
     gfx->setFont(txt->get_font());
-    gfx->setCursor(txt->get_cursor_x(), txt->get_cursor_y());
-    gfx->println(txt->get_txt());
+    
+    // Apply display rotation first
+    switch (rotation) {
+        case Rotation::ROT_90:
+            gfx->setRotation(1);
+            // Adjust coordinates for rotated display
+            x = txt->get_cursor_y();
+            y = gfx->height() - txt->get_cursor_x();
+            break;
+        case Rotation::ROT_180:
+            gfx->setRotation(2);
+            // Adjust coordinates for rotated display
+            x = gfx->width() - txt->get_cursor_x();
+            y = gfx->height() - txt->get_cursor_y();
+            break;
+        case Rotation::ROT_270:
+            gfx->setRotation(3);
+            // Adjust coordinates for rotated display
+            x = gfx->width() - txt->get_cursor_y();
+            y = txt->get_cursor_x();
+            break;
+        case Rotation::ROT_0:
+        default:
+            gfx->setRotation(0);
+            // No coordinate adjustment needed
+            break;
+    }
+    
+    gfx->setCursor(x, y);
+    
+    String text = txt->get_txt();
+    gfx->println(text);
+    
+    // Reset rotation for next operations
+    gfx->setRotation(0);
+}
+
+// Overloaded version for backward compatibility
+void Screen::draw_text(MediaContainer* txt) {
+    draw_text(txt, Rotation::ROT_0);
 }
 
 void Screen::display_next() {
     if (display_queue.empty()) {
         return;
     }
-    delete current_disp;
+    
+    if (current_disp != nullptr) {
+        Serial.println("[SCREEN] Deleting current display");
+        delay(10); // Give any running tasks a moment
+        delete current_disp;
+        Serial.println("[SCREEN] Current display deleted");
+    }
 
     current_disp = display_queue.front();
     display_queue.pop_front();
@@ -124,7 +299,7 @@ Screen::Screen()
 
     Wire.setClock(1000000);   // speed up I2C
 
-    gfx->fillScreen(BLACK);
+    gfx->fillScreen(DICE_BLACK);
     gfx->setUTF8Print(true);
 
     expander->pinMode(PCA_TFT_BACKLIGHT, OUTPUT);

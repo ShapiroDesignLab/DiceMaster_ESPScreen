@@ -6,8 +6,6 @@
 #include <map>
 
 
-namespace DConstant {
-
 // Enums for Media Status
 enum class MediaStatus : uint8_t {
     NOT_RECEIVED = 0,
@@ -50,12 +48,22 @@ enum class FontID : uint8_t {
     DEVANAGARI=5
 };
 
-// enum class PrettyColor : uint32_t {
-//     DARKGREY = 0x636363,
-//     BABYBLUE = 0xbee3f5,
-//     BLACK = 0x000000,
-//     WHITE = 0xffffff
-// };
+// Enums for Rotation
+enum class Rotation : uint8_t {
+    ROT_0 = 0,      // 0 degrees
+    ROT_90 = 1,     // 90 degrees clockwise
+    ROT_180 = 2,    // 180 degrees
+    ROT_270 = 3     // 270 degrees clockwise (90 counter-clockwise)
+};
+
+// Common color constants (avoid conflicts with Arduino GFX library)
+constexpr uint16_t DICE_DARKGREY = 0x6B6D;
+constexpr uint16_t DICE_BABYBLUE = 0xDF1C;
+constexpr uint16_t DICE_BLACK = 0x0000;
+constexpr uint16_t DICE_WHITE = 0xFFFF;
+constexpr uint16_t DICE_RED = 0xF800;
+constexpr uint16_t DICE_GREEN = 0x07E0;
+constexpr uint16_t DICE_BLUE = 0x001F;
 
 enum class Command : uint8_t {
     BACKLIGHT_OFF =1,
@@ -66,7 +74,7 @@ enum class Command : uint8_t {
 // Screen Buffer Size
 constexpr size_t SCREEN_PXLCNT = 480 * 480;
 
-// Enums for Message Types
+// Enums for Message Types (compatible with protocol.h)
 enum class MessageType : uint8_t {
     TEXT_BATCH = 0x01,
     IMAGE_TRANSFER_START = 0x02,
@@ -79,11 +87,13 @@ enum class MessageType : uint8_t {
     GIF_TRANSFER_END = 0x09,
     BACKLIGHT_ON = 0x0A,
     BACKLIGHT_OFF = 0x0B,
-    ACK = 0xEF,
-    ERROR = 0xEE
+    PING_REQUEST = 0x0C,
+    PING_RESPONSE = 0x0D,
+    ACK = 0x0E,
+    ERROR = 0x0F
 };
 
-// Enums for Error Codes
+// Enums for Error Codes (compatible with protocol.h)
 enum class ErrorCode : uint8_t {
     SUCCESS = 0x00,
     UNKNOWN_MSG_TYPE = 0x01,
@@ -93,12 +103,27 @@ enum class ErrorCode : uint8_t {
     UNSUPPORTED_IMAGE_FORMAT = 0x06,
     OUT_OF_MEMORY = 0x07,
     INTERNAL_ERROR = 0x08,
-    INVALID_OPTION_INDEX = 0x09
+    INVALID_OPTION_INDEX = 0x09,
+    UNSUPPORTED_MESSAGE = 0x0A
 };
 
 // SPI Protocol constants
 constexpr uint8_t SOF_MARKER = 0x7E;
 
-} // namespace DConstant
+// Empty structs for protocol compatibility
+struct BacklightOn {};
+struct BacklightOff {};
+
+namespace DConstant {
+    // Keep namespace for backward compatibility
+    using ::MediaStatus;
+    using ::MediaType;
+    using ::ImageFormat;
+    using ::ImageResolution;
+    using ::FontID;
+    using ::Command;
+    using ::MessageType;
+    using ::ErrorCode;
+}
 
 #endif

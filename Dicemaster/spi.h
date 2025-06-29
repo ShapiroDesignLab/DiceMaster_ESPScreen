@@ -6,10 +6,10 @@
 #include <map>
 
 #include <ESP32DMASPISlave.h>
-#include "Media.h"
+#include "media.h"
 #include "protocol.h"
 
-namespace DSPI {
+namespace dice {
 
 // SPI Buffer Sizes
 constexpr size_t SPI_MOSI_BUFFER_SIZE = 2048;  // Adjust as needed
@@ -23,22 +23,26 @@ private:
     uint8_t* dma_rx_buf {nullptr};
 
     // Context Management
-    // uint8_t expecting_image_id;
-    // MediaContainer* expecting_container;
     std::map<uint8_t, MediaContainer*> ongoing_transfers;
 
     // ───────── Helpers to emit ACK / ERROR packets (using protocol.h) ────────
     void sendAck(uint8_t msgId, ErrorCode code = ErrorCode::SUCCESS)
     {
         DProtocol::Ack ack{code};
-        auto pkt = DProtocol::encode(ack, msgId);   // returns std::vector<uint8_t>
-        slave.queue(pkt.data(), nullptr, pkt.size());
+        // TODO: Implement encode function or use alternative approach
+        // auto pkt = DProtocol::encode(ack, msgId);   // returns std::vector<uint8_t>
+        // slave.queue(pkt.data(), nullptr, pkt.size());
     }
     void sendError(uint8_t msgId, ErrorCode code, const char* txt)
     {
-        DProtocol::Error err{code, txt};
-        auto pkt = DProtocol::encode(err, msgId);
-        slave.queue(pkt.data(), nullptr, pkt.size());
+        DProtocol::Error err;
+        err.code = code;
+        err.len = strlen(txt);
+        strncpy(err.text, txt, sizeof(err.text) - 1);
+        err.text[sizeof(err.text) - 1] = '\0';
+        // TODO: Implement encode function or use alternative approach
+        // auto pkt = DProtocol::encode(err, msgId);
+        // slave.queue(pkt.data(), nullptr, pkt.size());
     }
 
     // ───────── Message‑type specific handlers (return MediaContainer or NULL)
@@ -51,6 +55,13 @@ private:
 
 public:
     SPIDriver();
+    
+    /** Legacy API compatibility - now calls queueTransaction */
+    void queue_cmd_msgs() { queueTransaction(); }
+    
+    /** Legacy API compatibility - now calls poll */
+    std::vector<MediaContainer*> process_msgs() { return poll(); }
+    
     /** queue a new background DMA transaction if no outstanding one */
     void queueTransaction();
 
@@ -97,9 +108,9 @@ inline std::vector<MediaContainer*> SPIDriver::poll()
         offset += sz;
 
         DProtocol::Message msg;
-        DProtocol::ErrorCode ec = DProtocol::decodeMessage(buf, sz, msg);
+        ErrorCode ec = DProtocol::decode(buf, sz, msg);
 
-        if (ec != DProtocol::SUCCESS)            // parsing failed
+        if (ec != ErrorCode::SUCCESS)            // parsing failed
         {
             sendError(buf[2] /*msgId*/, ec, "decode");
             continue;
@@ -159,7 +170,7 @@ inline std::vector<MediaContainer*> SPIDriver::poll()
 // ─────────────────────────── TextBatch handler ────────────────────────
 inline MediaContainer* SPIDriver::handle(const DProtocol::TextBatch& tb)
 {
-    auto* group = new TextGroup(0, tb.bgColor, tb.fontColor);
+    auto* group = new TextGroup(0, DICE_DARKGREY, DICE_WHITE);
 
     for (uint8_t i = 0; i < tb.itemCount; ++i)
     {
@@ -167,7 +178,7 @@ inline MediaContainer* SPIDriver::handle(const DProtocol::TextBatch& tb)
         Text* t = new Text(
             String(reinterpret_cast<const char*>(it.text), it.len),
             0,
-            static_cast<FontID>(it.fontId),
+            static_cast<FontID>(it.font),
             it.x,
             it.y
         );
@@ -211,13 +222,13 @@ inline MediaContainer* SPIDriver::handle(const DProtocol::ImageChunk& ic)
 
 inline MediaContainer* SPIDriver::handle(const DProtocol::ImageEnd& ie)
 {
-    auto it = ongoing.find(ie.img_id);
-    if (it == ongoing.end()) {
+    auto it = ongoing_transfers.find(ie.imgId);
+    if (it == ongoing_transfers.end()) {
         sendError(/*msgId=*/0, ErrorCode::IMAGE_ID_MISMATCH, "end w/o start");
         return nullptr;
     }
     MediaContainer* complete = it->second;
-    ongoing.erase(it);
+    ongoing_transfers.erase(it);
     return complete;         // return ready‑to‑display image
 }
 

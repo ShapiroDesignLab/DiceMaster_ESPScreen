@@ -1,4 +1,5 @@
-#include "Media.h"
+#include "media.h"
+#include "esp_task_wdt.h"
 
 namespace dice {
 
@@ -73,11 +74,12 @@ FontID Text::get_font_id() const {
 }
 
 
-TextGroup::TextGroup(size_t dur, uint16_t bg_col, uint16_t font_col)
+TextGroup::TextGroup(size_t dur, uint16_t bg_col, uint16_t font_col, Rotation rot)
     : MediaContainer(MediaType::TEXTGROUP, dur)
     , next_idx(0)
     , bg_color(bg_col)
-    , font_color(font_col) {
+    , font_color(font_col)
+    , rotation(rot) {
     set_status(MediaStatus::READY);
 }
 
@@ -110,6 +112,14 @@ uint16_t TextGroup::get_font_color() const {
     return font_color;
 }
 
+Rotation TextGroup::get_rotation() const {
+    return rotation;
+}
+
+void TextGroup::set_rotation(Rotation rot) {
+    rotation = rot;
+}
+
 
 size_t Image::received_len() {
     return input_ptr - content;
@@ -118,51 +128,77 @@ size_t Image::received_len() {
 int Image::JPEGDraw480(JPEGDRAW* pDraw) {
     // Serial.println("Drawing");
     Image* img = static_cast<Image*>(pDraw->pUser);
+    
+    // Safety check - ensure the image object is still valid
+    if (img == nullptr || img->decoded_content == nullptr) {
+        return 0; // Stop decoding if object is invalid
+    }
+    
     img->decode_mtx.lock();
-    // uint16_t* destination = img->decoded_content + (pDraw->y * 480 + pDraw->x);
-    // memcpy(destination, pDraw->pPixels, pDraw->iWidth * pDraw->iHeight * sizeof(uint16_t));
-    // Serial.println("Plotting chunk");
+    
+    // For now, decode without rotation to isolate the crash issue
+    // Rotation will be handled at render time instead
+    
     for (int row = 0; row < pDraw->iHeight; row++) {
-        // Calculate the start of the line in the final buffer
-        uint16_t* dest_line = img->decoded_content + (pDraw->y + row) * 480 + pDraw->x;
         // Calculate the source line within pPixels
         const uint16_t* src_line = ((uint16_t*)pDraw->pPixels) + row * pDraw->iWidth;
 
-        memcpy(dest_line, src_line, pDraw->iWidth * sizeof(uint16_t));
+        for (int col = 0; col < pDraw->iWidth; col++) {
+            uint16_t pixel = src_line[col];
+            
+            // Calculate destination coordinates (no rotation during decode)
+            int dest_x = pDraw->x + col;
+            int dest_y = pDraw->y + row;
+            
+            // Bounds check and write pixel
+            if (dest_x >= 0 && dest_x < 480 && dest_y >= 0 && dest_y < 480) {
+                img->decoded_content[dest_y * 480 + dest_x] = pixel;
+            }
+        }
     }
+    
     img->decode_mtx.unlock();
     return 1;   // continue decode
 }
 
 int Image::JPEGDraw240(JPEGDRAW* pDraw) {
     Image* img = static_cast<Image*>(pDraw->pUser);
+    
+    // Safety check - ensure the image object is still valid
+    if (img == nullptr || img->decoded_content == nullptr) {
+        return 0; // Stop decoding if object is invalid
+    }
+    
     img->decode_mtx.lock();
+
+    // For now, decode without rotation to isolate the crash issue
+    // Rotation will be handled at render time instead
 
     for (int row = 0; row < pDraw->iHeight; row++) {
         // 1) Figure out the source pointer for this row in the chunk
         const uint16_t* src_line = 
             reinterpret_cast<const uint16_t*>(pDraw->pPixels) + row * pDraw->iWidth;
 
-        // 2) Compute the *upscaled* row in the final 480×480 buffer
-        //    Each Y in [0..239] maps to 2*Y in [0..478].
-        int scaled_y = 2 * (pDraw->y + row);
-
-        // 3) Destination pointer for the first (upper) row of the 2×2 block
-        uint16_t* dest_line = img->decoded_content 
-                              + (scaled_y * 480) 
-                              + (2 * pDraw->x); 
-
-        // 4) Expand horizontally by copying each source pixel twice
-        //    (Because each X in [0..239] maps to 2*X in [0..478].)
         for (int col = 0; col < pDraw->iWidth; col++) {
-            uint16_t px = src_line[col];
-            dest_line[2*col]     = px;  // repeat horizontally
-            dest_line[2*col + 1] = px;
+            uint16_t pixel = src_line[col];
+            
+            // Calculate source coordinates (before scaling)
+            int src_x = pDraw->x + col;
+            int src_y = pDraw->y + row;
+            
+            // Scale to 480x480 (each 240 pixel becomes 2x2 block)
+            for (int dy = 0; dy < 2; dy++) {
+                for (int dx = 0; dx < 2; dx++) {
+                    int dest_x = src_x * 2 + dx;
+                    int dest_y = src_y * 2 + dy;
+                    
+                    // Bounds check and write pixel (no rotation during decode)
+                    if (dest_x >= 0 && dest_x < 480 && dest_y >= 0 && dest_y < 480) {
+                        img->decoded_content[dest_y * 480 + dest_x] = pixel;
+                    }
+                }
+            }
         }
-        // Copy things over
-        memcpy(dest_line + 480, 
-               dest_line, 
-               (2 * pDraw->iWidth) * sizeof(uint16_t));
     }
 
     img->decode_mtx.unlock();
@@ -171,6 +207,18 @@ int Image::JPEGDraw240(JPEGDRAW* pDraw) {
 
 
 void Image::decode() {
+    Serial.println("[IMAGE] Starting decode for ID " + String(image_id));
+    
+    // Check if we still have valid content
+    if (content == nullptr || decoded_content == nullptr) {
+        Serial.println("[ERROR] Invalid buffers during decode");
+        set_status(MediaStatus::EXPIRED);
+        return;
+    }
+    
+    // Feed watchdog before starting intensive operation
+    esp_task_wdt_reset();
+    
     jpeg.setPixelType(RGB565_LITTLE_ENDIAN);   // Adjust as necessary
     // Set the drawing function
     int (*JPEGDraw) (JPEGDRAW*);
@@ -184,15 +232,28 @@ void Image::decode() {
     }
     // Decode
     if (jpeg.openRAM(content, total_size, JPEGDraw)) {
-        // Serial.println("Decoding");
+        Serial.println("[IMAGE] JPEG opened, starting decode");
         jpeg.setUserPointer(this);
-        if (jpeg.decode(0, 0, 0)) {}   // Decode at full scale
+        
+        // Feed watchdog during decode
+        esp_task_wdt_reset();
+        
+        if (jpeg.decode(0, 0, 0)) {
+            Serial.println("[IMAGE] JPEG decode completed successfully");
+        } else {
+            Serial.println("[ERROR] JPEG decode failed");
+        }
         jpeg.close();
+        
+        // Feed watchdog after decode
+        esp_task_wdt_reset();
+        
         // free(content);   // Free original content as it's no longer needed
         // content = nullptr;
         set_status(MediaStatus::READY);
+        Serial.println("[IMAGE] Decode finished for ID " + String(image_id));
     } else {
-        Serial.println("[Warning] Bad image file");
+        Serial.println("[Warning] Bad image file for ID " + String(image_id));
         set_status(MediaStatus::EXPIRED);   // Handle error appropriately
     }
 }
@@ -203,27 +264,74 @@ void Image::startDecode() {
     // Serial.println("Task started");
 }
 
-Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration)
+Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, Rotation rot)
     : MediaContainer(MediaType::IMAGE, duration)
     , image_id(img_id)
     , image_format(format)
     , resolution(res)
     , total_size(total_img_size)
-    , content((uint8_t*) ps_malloc(total_img_size))
-    , input_ptr(content)
-    , decoded_content((uint16_t*) ps_malloc(SCREEN_PXLCNT * sizeof(uint16_t)))
+    , rotation(rot)
+    , content(nullptr)
+    , input_ptr(nullptr)
+    , decoded_content(nullptr)
     , decodeTaskHandle(nullptr) {
-    if (content == nullptr || decoded_content == nullptr) {
-        // Handle memory allocation failure
+    
+    Serial.println("[IMAGE] Creating image ID " + String(img_id) + " size " + String(total_img_size) + " bytes");
+    Serial.println("[MEMORY] Free PSRAM before alloc: " + String(ESP.getFreePsram()));
+    
+    // Allocate content buffer in PSRAM
+    content = (uint8_t*) ps_malloc(total_img_size);
+    if (content == nullptr) {
+        Serial.println("[ERROR] Failed to allocate content buffer in PSRAM");
         set_status(MediaStatus::EXPIRED);
+        return;
     }
+    
+    // Allocate decoded content buffer in PSRAM
+    decoded_content = (uint16_t*) ps_malloc(SCREEN_PXLCNT * sizeof(uint16_t));
+    if (decoded_content == nullptr) {
+        Serial.println("[ERROR] Failed to allocate decoded buffer in PSRAM");
+        free(content);
+        content = nullptr;
+        set_status(MediaStatus::EXPIRED);
+        return;
+    }
+    
+    // Clear the decoded buffer
+    memset(decoded_content, 0, SCREEN_PXLCNT * sizeof(uint16_t));
+    
+    input_ptr = content;
+    
+    Serial.println("[MEMORY] Free PSRAM after alloc: " + String(ESP.getFreePsram()));
+    Serial.println("[IMAGE] Image buffers allocated successfully");
 }
 
 Image::~Image() {
-    free(content);
-    content = nullptr;
-    free(decoded_content);
-    decoded_content = nullptr;
+    Serial.println("[IMAGE] Destroying image ID " + String(image_id));
+    Serial.println("[MEMORY] Free PSRAM before cleanup: " + String(ESP.getFreePsram()));
+    
+    // Stop decoding task if still running
+    if (decodeTaskHandle != nullptr) {
+        vTaskDelete(decodeTaskHandle);
+        decodeTaskHandle = nullptr;
+        Serial.println("[IMAGE] Decode task terminated");
+    }
+    
+    // Free PSRAM buffers
+    if (content != nullptr) {
+        free(content);
+        content = nullptr;
+        input_ptr = nullptr;
+        Serial.println("[IMAGE] Content buffer freed");
+    }
+    
+    if (decoded_content != nullptr) {
+        free(decoded_content);
+        decoded_content = nullptr;
+        Serial.println("[IMAGE] Decoded buffer freed");
+    }
+    
+    Serial.println("[MEMORY] Free PSRAM after cleanup: " + String(ESP.getFreePsram()));
 }
 
 uint16_t* Image::get_img() {
@@ -263,6 +371,14 @@ ImageFormat Image::get_image_format() const {
 
 ImageResolution Image::get_image_resolution() const {
     return resolution;
+}
+
+Rotation Image::get_rotation() const {
+    return rotation;
+}
+
+void Image::set_rotation(Rotation rot) {
+    rotation = rot;
 }
 
 void Image::add_decoded(const uint16_t* img) {
@@ -315,22 +431,9 @@ void Image::add_decoded(const uint16_t* img) {
 //     return selecting_id;
 // }
 
-// Demo Functions
-MediaContainer* get_demo_textgroup() {
-    TextGroup* group = new TextGroup(0, DARKGREY, WHITE);
-    group->add_member(new Text("Psíquico", 0, FontID::TF, 40, 40));
-    group->add_member(new Text("Hellseher", 0, FontID::TF, 280, 40));
-    group->add_member(new Text("экстрасенс", 0, FontID::CYRILLIC, 40, 160));
-    group->add_member(new Text("Psychique", 0, FontID::TF, 280, 160));
-    group->add_member(new Text("Psychic", 0, FontID::TF, 40, 280));
-    group->add_member(new Text("मानसिक", 0, FontID::DEVANAGARI, 280, 280));
-    group->add_member(new Text("靈媒", 0, FontID::CHINESE, 40, 400));
-    group->add_member(new Text("نفسية", 0, FontID::ARABIC, 280, 400));
-    return group;
-}
 
 MediaContainer* print_error(String input) {
-    TextGroup* group = new TextGroup(0, DARKGREY, WHITE);
+    TextGroup* group = new TextGroup(0, DICE_DARKGREY, DICE_WHITE);
     group->add_member(new Text("DEBUG Info:", 0, FontID::TF, 40, 40));
     group->add_member(new Text(input, 0, FontID::TF, 40, 160));
     Serial.println("[ERROR]: " + input);

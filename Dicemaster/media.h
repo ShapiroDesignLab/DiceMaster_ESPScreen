@@ -36,6 +36,10 @@ public:
 
     virtual void trigger_display();
 
+    // APIs for rotation support
+    virtual Rotation get_rotation() const {return Rotation::ROT_0;}
+    virtual void set_rotation(Rotation rot) {return;}
+
     // APIs for Text
     virtual const uint8_t* get_font() const {return 0;}
     virtual uint16_t get_cursor_x() const {return 0;}
@@ -78,6 +82,7 @@ private:
     const size_t total_size;
     uint8_t* input_ptr;
     ImageResolution resolution;
+    Rotation rotation;
 
     // Decoding parameters
     uint16_t* decoded_content;
@@ -95,6 +100,8 @@ private:
     static void decodeTask(void* pvParameters) {
         Image* img = static_cast<Image*>(pvParameters);
         img->decode();
+        // Clear the handle before deleting the task to prevent double-delete
+        img->decodeTaskHandle = nullptr;
         vTaskDelete(nullptr);   // Delete task after completion
     }
     void decode();
@@ -105,7 +112,7 @@ private:
     void startDecode();
 
 public:
-    Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration);
+    Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, Rotation rot = Rotation::ROT_0);
     virtual ~Image();
 
     virtual uint16_t* get_img();
@@ -114,6 +121,8 @@ public:
     virtual uint8_t get_image_id() const;
     virtual ImageFormat get_image_format() const;
     virtual ImageResolution get_image_resolution() const;
+    virtual Rotation get_rotation() const;
+    virtual void set_rotation(Rotation rot);
 };
 
 
@@ -140,7 +149,7 @@ public:
     static const uint8_t* map_font(FontID font_id) {
         switch (font_id) {
         case FontID::TF:
-            return u8g2_font_unifont_tf;
+            return u8g2_font_unifont_tf;  // Back to original with background
         case FontID::ARABIC:
             return u8g2_font_unifont_t_arabic;
         case FontID::CHINESE:
@@ -149,8 +158,9 @@ public:
             return u8g2_font_cu12_t_cyrillic;
         case FontID::DEVANAGARI:
             return u8g2_font_unifont_t_devanagari;
+            // return u8g2_font_6x13_t_devangari;
         default:
-            return u8g2_font_unifont_tf;
+            return u8g2_font_unifont_tf;  // Back to original with background
         }
     }
 };
@@ -162,9 +172,10 @@ private:
     size_t next_idx;
     const uint16_t bg_color;
     const uint16_t font_color;
+    Rotation rotation;
 
 public:
-    TextGroup(const size_t dur, const uint16_t bg_col, const uint16_t font_col);
+    TextGroup(const size_t dur, const uint16_t bg_col, const uint16_t font_col, Rotation rot = Rotation::ROT_0);
     virtual ~TextGroup();
 
     virtual void add_member(MediaContainer* txt);
@@ -173,6 +184,8 @@ public:
     virtual MediaContainer* get_next();
     virtual uint16_t get_bg_color() const;
     virtual uint16_t get_font_color() const;
+    virtual Rotation get_rotation() const;
+    virtual void set_rotation(Rotation rot);
 };
 
 
