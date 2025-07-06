@@ -12,7 +12,7 @@
 namespace dice {
 
 // SPI Buffer Sizes
-constexpr size_t SPI_MOSI_BUFFER_SIZE = 2048;  // Adjust as needed
+constexpr size_t SPI_MOSI_BUFFER_SIZE = 4096;  // Adjust as needed
 constexpr size_t SPI_MISO_BUFFER_SIZE = 256;   // For ACK/NACK messages
 constexpr size_t QUEUE_SIZE = 1;
 
@@ -28,21 +28,46 @@ private:
     // ───────── Helpers to emit ACK / ERROR packets (using protocol.h) ────────
     void sendAck(uint8_t msgId, ErrorCode code = ErrorCode::SUCCESS)
     {
-        DProtocol::Ack ack{code};
-        // TODO: Implement encode function or use alternative approach
-        // auto pkt = DProtocol::encode(ack, msgId);   // returns std::vector<uint8_t>
-        // slave.queue(pkt.data(), nullptr, pkt.size());
+        Message ackMsg;
+        ackMsg.hdr.marker = ::SOF_MARKER;
+        ackMsg.hdr.type = MessageType::ACK;
+        ackMsg.hdr.id = msgId;
+        
+        ackMsg.payload.tag = TAG_ACK;
+        ackMsg.payload.u.ack.status = code;
+        
+        // Encode the ACK message
+        size_t encodedSize = encode(dma_tx_buf, SPI_MISO_BUFFER_SIZE, ackMsg);
+        if (encodedSize > 0) {
+            slave.queue(dma_tx_buf, nullptr, encodedSize);
+            Serial.println("[SPI] Sent ACK - ID: " + String(msgId) + ", Status: " + String(static_cast<uint8_t>(code)));
+        } else {
+            Serial.println("[SPI] Failed to encode ACK message");
+        }
     }
+    
     void sendError(uint8_t msgId, ErrorCode code, const char* txt)
     {
-        DProtocol::Error err;
-        err.code = code;
-        err.len = strlen(txt);
-        strncpy(err.text, txt, sizeof(err.text) - 1);
-        err.text[sizeof(err.text) - 1] = '\0';
-        // TODO: Implement encode function or use alternative approach
-        // auto pkt = DProtocol::encode(err, msgId);
-        // slave.queue(pkt.data(), nullptr, pkt.size());
+        Message errorMsg;
+        errorMsg.hdr.marker = ::SOF_MARKER;
+        errorMsg.hdr.type = MessageType::ERROR;
+        errorMsg.hdr.id = msgId;
+        
+        errorMsg.payload.tag = TAG_ERROR;
+        errorMsg.payload.u.error.code = code;
+        errorMsg.payload.u.error.len = strlen(txt);
+        strncpy(errorMsg.payload.u.error.text, txt, sizeof(errorMsg.payload.u.error.text) - 1);
+        errorMsg.payload.u.error.text[sizeof(errorMsg.payload.u.error.text) - 1] = '\0';
+        
+        // Encode the ERROR message
+        size_t encodedSize = encode(dma_tx_buf, SPI_MISO_BUFFER_SIZE, errorMsg);
+        if (encodedSize > 0) {
+            slave.queue(dma_tx_buf, nullptr, encodedSize);
+            Serial.println("[SPI] Sent ERROR - ID: " + String(msgId) + ", Code: " + String(static_cast<uint8_t>(code)));
+            Serial.println("[SPI] Error Message: " + String(txt));
+        } else {
+            Serial.println("[SPI] Failed to encode ERROR message");
+        }
     }
 
     // ───────── Message‑type specific handlers (return MediaContainer or NULL)

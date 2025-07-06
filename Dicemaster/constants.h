@@ -15,6 +15,13 @@ enum class MediaStatus : uint8_t {
     EXPIRED = 5
 };
 
+// Enums for System Operating Mode
+enum class SystemMode : uint8_t {
+    TESTING = 0,
+    DEMO = 1,
+    PRODUCTION = 2
+};
+
 // Enums for Media Types
 enum class MediaType : uint8_t {
     TEXT = 0,

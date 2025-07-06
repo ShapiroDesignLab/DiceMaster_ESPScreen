@@ -3,7 +3,9 @@
 
 #include "media.h"
 #include "protocol.h"
+#include "screen.h"  // Include the actual Screen class definition
 #include "jpg.hs/umlogo_sq240.h"
+
 #include "jpg.hs/revolving_umlogo_12/rev_00.h"
 #include "jpg.hs/revolving_umlogo_12/rev_02.h"
 #include "jpg.hs/revolving_umlogo_12/rev_04.h"
@@ -46,7 +48,36 @@ const size_t revolving_umlogo_12_sizes[12] = {
 
 const size_t revolving_umlogo_12_count = 12;
 
+// ===================== FORWARD DECLARATIONS =====================
+
+// Forward declarations for functions used in demo sequences
+namespace dice {
+    String get_board_status();
+    bool test_protocol_encode_decode();
+    bool test_image_protocol_encode_decode();
+}
+
 // ===================== DEMO FUNCTIONS =====================
+
+/**
+ * Helper function to create an error text group
+ */
+MediaContainer* print_error(const char* error_msg) {
+    TextGroup* group = new TextGroup(2000, DICE_RED, DICE_WHITE);
+    group->add_member(new Text("ERROR:", 0, FontID::TF, 200, 200));
+    group->add_member(new Text(error_msg, 0, FontID::TF, 150, 250));
+    return group;
+}
+
+/**
+ * Helper function to create a success text group
+ */
+MediaContainer* print_success(const char* success_msg) {
+    TextGroup* group = new TextGroup(2000, DICE_GREEN, DICE_BLACK);
+    group->add_member(new Text("SUCCESS:", 0, FontID::TF, 180, 200));
+    group->add_member(new Text(success_msg, 0, FontID::TF, 130, 250));
+    return group;
+}
 
 /**
  * Creates a multi-language text demonstration showing "Psychic" in 8 languages
@@ -308,16 +339,6 @@ uint8_t* make_test_text_message(const char* text, uint16_t x, uint16_t y,
 // ===================== DEMO SEQUENCES =====================
 
 /**
- * Demo function that cycles through revolving logo frames
- * Call this repeatedly to create animation effect
- */
-MediaContainer* demo_revolving_animation(int& frame_counter) {
-    MediaContainer* frame = get_demo_revolving_frame(frame_counter % revolving_umlogo_12_count);
-    frame_counter++;
-    return frame;
-}
-
-/**
  * Creates a demo showing protocol ping functionality
  */
 String get_board_status() {
@@ -424,6 +445,148 @@ bool test_protocol_encode_decode() {
 }
 
 /**
+ * Demo function that cycles through revolving logo frames
+ * Call this repeatedly to create animation effect
+ */
+MediaContainer* demo_revolving_animation(int& frame_counter) {
+    MediaContainer* frame = get_demo_revolving_frame(frame_counter % revolving_umlogo_12_count);
+    frame_counter++;
+    return frame;
+}
+
+/**
+ * Creates a rotated UM logo for demo
+ */
+MediaContainer* get_demo_rotated_logo(Rotation rotation) {
+    try {
+        Image* img = new Image(100 + static_cast<uint8_t>(rotation), ImageFormat::JPEG, 
+                              ImageResolution::SQ240, umlogo_sq240_SIZE, 1000, rotation);
+        img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
+        return img;
+    } catch (...) {
+        return print_error("Failed to create rotated logo");
+    }
+}
+
+/**
+ * Creates rotated text for demo
+ */
+MediaContainer* get_demo_rotated_text(Rotation rotation) {
+    TextGroup* group = new TextGroup(1000, DICE_BLACK, DICE_WHITE, rotation);
+    
+    // Text positioned for center display
+    String rotText = "ROTATION " + String(static_cast<uint8_t>(rotation) * 90) + "°";
+    group->add_member(new Text(rotText.c_str(), 0, FontID::TF, 200, 200));
+    group->add_member(new Text("UNIVERSITY OF", 0, FontID::TF, 160, 240));
+    group->add_member(new Text("MICHIGAN", 0, FontID::TF, 180, 280));
+    
+    return group;
+}
+
+/**
+ * Main demo sequence manager - handles cycling through different demo phases
+ */
+void run_demo_sequence(Screen* screen, int& revolving_counter) {
+    static unsigned long last_demo_change = 0;
+    static int demo_phase = 0;
+    static bool demo_suite_run = false;
+    unsigned long now = millis();
+    
+    // Run demo tests once at startup
+    if (!demo_suite_run) {
+        // You could call a demo version of tests here if needed
+        demo_suite_run = true;
+        last_demo_change = now;
+    }
+
+    // Change demo every 3 seconds
+    if (now - last_demo_change > 3000) {
+        switch (demo_phase) {
+            case 0:
+                Serial.println("Demo: Multi-language text");
+                screen->enqueue(get_demo_textgroup());
+                break;
+
+            case 1:
+                Serial.println("Demo: Font showcase");
+                screen->enqueue(get_demo_fonts());
+                break;
+
+            case 2:
+                Serial.println("Demo: Revolving logo animation");
+                // Show several frames in sequence
+                for (int i = 0; i < 12; i++) {
+                    MediaContainer* frame = get_demo_revolving_frame(revolving_counter % revolving_umlogo_12_count);
+                    if (frame) {
+                        // Wait for decode
+                        while (frame->get_status() != MediaStatus::READY && 
+                                frame->get_status() != MediaStatus::EXPIRED) {
+                            delay(1);
+                        }
+                        screen->enqueue(frame);
+                        screen->update();
+                        delay(83); // Fast animation
+                        revolving_counter++;
+                    }
+                }
+                break;
+
+            case 3:
+                Serial.println("Demo: Color showcase");
+                screen->enqueue(get_demo_colors());
+                break;
+
+            case 4:
+                Serial.println("Demo: Rotation test - Images");
+                // Show UM logo in all 4 rotations, 1 second each
+                for (int rot = 0; rot < 4; rot++) {
+                    Rotation rotation = static_cast<Rotation>(rot);
+                    MediaContainer* rotated_logo = get_demo_rotated_logo(rotation);
+                    if (rotated_logo) {
+                        screen->enqueue(rotated_logo);
+                        screen->update();
+                        delay(1000); // 1 second each
+                    }
+                }
+                break;
+                
+            case 5:
+                Serial.println("Demo: Rotation test - Text");
+                // Show text in all 4 rotations, 1 second each
+                for (int rot = 0; rot < 4; rot++) {
+                    Rotation rotation = static_cast<Rotation>(rot);
+                    MediaContainer* rotated_text = get_demo_rotated_text(rotation);
+                    if (rotated_text) {
+                        screen->enqueue(rotated_text);
+                        screen->update();
+                        delay(1000); // 1 second each
+                    }
+                }
+                break;
+                
+            case 6:
+                Serial.println("Demo: Protocol ACK/ERROR test");
+                if (test_ack_error_protocol()) {
+                    MediaContainer* success_msg = print_success("ACK/ERROR Protocol Test PASSED");
+                    screen->enqueue(success_msg);
+                } else {
+                    MediaContainer* error_msg = print_error("ACK/ERROR Protocol Test FAILED");
+                    screen->enqueue(error_msg);
+                }
+                break;
+                
+            default:
+                demo_phase = -1; // Reset
+                Serial.println("Demo cycle complete, restarting...");
+                break;
+        }
+        
+        demo_phase++;
+        last_demo_change = now;
+    }
+}
+
+/**
  * Test image protocol encoding/decoding with rotation
  */
 bool test_image_protocol_encode_decode() {
@@ -498,15 +661,220 @@ bool test_image_protocol_encode_decode() {
     return success;
 }
 
+// ===================== ACK/ERROR MESSAGE HELPERS =====================
+
+/**
+ * Creates an ACK message with the specified status
+ * @param status The ErrorCode status to include in the ACK
+ * @param msg_id The message ID for the ACK
+ * @return Encoded ACK message buffer (caller must free)
+ */
+uint8_t* create_ack_message(ErrorCode status, uint8_t msg_id) {
+    Message ackMsg;
+    ackMsg.hdr.marker = ::SOF_MARKER;
+    ackMsg.hdr.type = MessageType::ACK;
+    ackMsg.hdr.id = msg_id;
+    
+    ackMsg.payload.tag = TAG_ACK;
+    ackMsg.payload.u.ack.status = status;
+    
+    // Allocate buffer for encoded message
+    uint8_t* buffer = new uint8_t[256]; // Should be enough for ACK
+    size_t encodedSize = encode(buffer, 256, ackMsg);
+    
+    if (encodedSize == 0) {
+        delete[] buffer;
+        return nullptr;
+    }
+    
+    return buffer;
+}
+
+/**
+ * Creates an ERROR message with the specified error code and message
+ * @param error_code The ErrorCode to include
+ * @param error_text The error message text
+ * @param msg_id The message ID for the ERROR
+ * @return Encoded ERROR message buffer (caller must free)
+ */
+uint8_t* create_error_message(ErrorCode error_code, const char* error_text, uint8_t msg_id) {
+    Message errorMsg;
+    errorMsg.hdr.marker = ::SOF_MARKER;
+    errorMsg.hdr.type = MessageType::ERROR;
+    errorMsg.hdr.id = msg_id;
+    
+    errorMsg.payload.tag = TAG_ERROR;
+    errorMsg.payload.u.error.code = error_code;
+    errorMsg.payload.u.error.len = strlen(error_text);
+    strncpy(errorMsg.payload.u.error.text, error_text, sizeof(errorMsg.payload.u.error.text) - 1);
+    errorMsg.payload.u.error.text[sizeof(errorMsg.payload.u.error.text) - 1] = '\0'; // Ensure null termination
+    
+    // Allocate buffer for encoded message
+    uint8_t* buffer = new uint8_t[512]; // Should be enough for ERROR with text
+    size_t encodedSize = encode(buffer, 512, errorMsg);
+    
+    if (encodedSize == 0) {
+        delete[] buffer;
+        return nullptr;
+    }
+    
+    return buffer;
+}
+
+/**
+ * Sends an ACK message response
+ * @param status The ErrorCode status
+ * @param msg_id The message ID
+ * @return true if successful, false otherwise
+ */
+bool send_ack_response(ErrorCode status, uint8_t msg_id) {
+    uint8_t* ackBuffer = create_ack_message(status, msg_id);
+    if (!ackBuffer) {
+        Serial.println("[ERROR] Failed to create ACK message");
+        return false;
+    }
+    
+    // TODO: Implement actual SPI sending logic here
+    // For now, just log the ACK
+    Serial.println("[ACK] Sending ACK response - Status: " + String(static_cast<uint8_t>(status)) + ", ID: " + String(msg_id));
+    
+    delete[] ackBuffer;
+    return true;
+}
+
+/**
+ * Sends an ERROR message response
+ * @param error_code The ErrorCode
+ * @param error_text The error message text
+ * @param msg_id The message ID
+ * @return true if successful, false otherwise
+ */
+bool send_error_response(ErrorCode error_code, const char* error_text, uint8_t msg_id) {
+    uint8_t* errorBuffer = create_error_message(error_code, error_text, msg_id);
+    if (!errorBuffer) {
+        Serial.println("[ERROR] Failed to create ERROR message");
+        return false;
+    }
+    
+    // TODO: Implement actual SPI sending logic here
+    // For now, just log the ERROR
+    Serial.println("[ERROR] Sending ERROR response - Code: " + String(static_cast<uint8_t>(error_code)) + ", ID: " + String(msg_id));
+    Serial.println("[ERROR] Message: " + String(error_text));
+    
+    delete[] errorBuffer;
+    return true;
+}
+
+/**
+ * Test function to verify ACK and ERROR message encoding/decoding
+ */
+bool test_ack_error_protocol() {
+    Serial.println("[TEST] Testing ACK/ERROR protocol encoding/decoding...");
+    
+    // Test ACK message
+    {
+        uint8_t* ackBuffer = create_ack_message(ErrorCode::SUCCESS, 42);
+        if (!ackBuffer) {
+            Serial.println("[TEST] Failed to create ACK message");
+            return false;
+        }
+        
+        // Decode the ACK message
+        Message decodedMsg;
+        ErrorCode result = decode(ackBuffer, 256, decodedMsg);
+        
+        if (result != ErrorCode::SUCCESS) {
+            Serial.println("[TEST] Failed to decode ACK message");
+            delete[] ackBuffer;
+            return false;
+        }
+        
+        if (decodedMsg.hdr.type != MessageType::ACK || 
+            decodedMsg.payload.u.ack.status != ErrorCode::SUCCESS) {
+            Serial.println("[TEST] ACK message decode verification failed");
+            delete[] ackBuffer;
+            return false;
+        }
+        
+        delete[] ackBuffer;
+        Serial.println("[TEST] ACK message test PASSED");
+    }
+    
+    // Test ERROR message
+    {
+        const char* testError = "Test error message";
+        uint8_t* errorBuffer = create_error_message(ErrorCode::OUT_OF_MEMORY, testError, 43);
+        if (!errorBuffer) {
+            Serial.println("[TEST] Failed to create ERROR message");
+            return false;
+        }
+        
+        // Decode the ERROR message
+        Message decodedMsg;
+        ErrorCode result = decode(errorBuffer, 512, decodedMsg);
+        
+        if (result != ErrorCode::SUCCESS) {
+            Serial.println("[TEST] Failed to decode ERROR message");
+            delete[] errorBuffer;
+            return false;
+        }
+        
+        if (decodedMsg.hdr.type != MessageType::ERROR || 
+            decodedMsg.payload.u.error.code != ErrorCode::OUT_OF_MEMORY ||
+            strcmp(decodedMsg.payload.u.error.text, testError) != 0) {
+            Serial.println("[TEST] ERROR message decode verification failed");
+            delete[] errorBuffer;
+            return false;
+        }
+        
+        delete[] errorBuffer;
+        Serial.println("[TEST] ERROR message test PASSED");
+    }
+    
+    Serial.println("[TEST] ACK/ERROR protocol test completed successfully");
+    return true;
+}
+
 // ===================== FUNCTION DECLARATIONS =====================
 
-// Rotation demo functions
+// Core demo functions
+MediaContainer* get_demo_textgroup();
+MediaContainer* get_demo_fonts();
 MediaContainer* get_demo_textgroup_rotated(Rotation rot);
 MediaContainer* get_demo_image_rotated(Rotation rot);
-MediaContainer* get_rotation_test_pattern(Rotation rot);
+MediaContainer* get_demo_revolving_frame(uint8_t frame_index);
+MediaContainer* get_demo_startup_logo();
+MediaContainer* get_demo_colors();
+MediaContainer* get_demo_rotated_logo(Rotation rotation);
+MediaContainer* get_demo_rotated_text(Rotation rotation);
+
+// Demo sequence management
+void run_demo_sequence(Screen* screen, int& revolving_counter);
+
+// Utility functions (already defined above)
 String get_board_status();
 bool test_protocol_encode_decode();
 bool test_image_protocol_encode_decode();
+bool test_ack_error_protocol();
+
+// ACK/ERROR message helpers
+uint8_t* create_ack_message(ErrorCode status, uint8_t msg_id);
+uint8_t* create_error_message(ErrorCode error_code, const char* error_text, uint8_t msg_id);
+bool send_ack_response(ErrorCode status, uint8_t msg_id);
+bool send_error_response(ErrorCode error_code, const char* error_text, uint8_t msg_id);
+
+// Helper message functions
+MediaContainer* print_error(const char* error_msg);
+MediaContainer* print_success(const char* success_msg);
+
+// Message creation helpers
+uint8_t** make_test_img_message(const uint8_t* img_data, size_t img_size, 
+                                uint8_t img_id, size_t chunk_size, uint8_t msg_id_start);
+uint8_t* make_test_text_message(const char* text, uint16_t x, uint16_t y, 
+                               FontID font, uint8_t msg_id);
+
+// Animation demo
+MediaContainer* demo_revolving_animation(int& frame_counter);
 
 /**
  * Creates a comprehensive rotation test with visual markers

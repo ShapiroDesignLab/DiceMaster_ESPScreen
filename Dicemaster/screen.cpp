@@ -164,6 +164,35 @@ void Screen::set_display_rotation(Rotation rotation) {
     // For now, we'll handle rotation through coordinate transformation
 }
 
+// Optimized rotation setter that caches the current state
+void Screen::set_gfx_rotation_cached(Rotation rotation) {
+    // Only call setRotation if the rotation has actually changed
+    if (current_gfx_rotation != rotation) {
+        uint8_t gfx_rotation_value;
+        switch (rotation) {
+            case Rotation::ROT_90:
+                gfx_rotation_value = 1;
+                break;
+            case Rotation::ROT_180:
+                gfx_rotation_value = 2;
+                break;
+            case Rotation::ROT_270:
+                gfx_rotation_value = 3;
+                break;
+            case Rotation::ROT_0:
+            default:
+                gfx_rotation_value = 0;
+                break;
+        }
+        
+        gfx->setRotation(gfx_rotation_value);
+        current_gfx_rotation = rotation;
+        
+        // Debug logging for rotation changes
+        Serial.println("[ROTATION] Changed GFX rotation to " + String(static_cast<uint8_t>(rotation) * 90) + "°");
+    }
+}
+
 void Screen::draw_textgroup(MediaContainer* tg) {
     if (tg->get_media_type() != MediaType::TEXTGROUP){
         return;
@@ -172,7 +201,8 @@ void Screen::draw_textgroup(MediaContainer* tg) {
     draw_color(tg->get_bg_color());
     gfx->setTextSize(2);
     // Set the TextGroup's font color
-    gfx->setTextColor(tg->get_font_color());
+    uint16_t text_color = tg->get_font_color();
+    gfx->setTextColor(text_color);
 
     // Get rotation for this text group
     Rotation rotation = tg->get_rotation();
@@ -180,56 +210,45 @@ void Screen::draw_textgroup(MediaContainer* tg) {
 
     MediaContainer* next = tg->get_next();
     while (next != nullptr) {
-        draw_text(next, rotation);
+        draw_text(next, rotation, text_color);  // Pass text color to draw_text
         next = tg->get_next();
     }
 }
 
-void Screen::draw_text(MediaContainer* txt, Rotation rotation) {
+void Screen::draw_text(MediaContainer* txt, Rotation rotation, uint16_t text_color) {
     if (txt->get_media_type() != MediaType::TEXT){
         return;
     }
     
-    // Get original coordinates from the text object (always specified for 0° rotation)
+    // Get coordinates from the text object (always specified for 0° rotation)
     uint16_t x = txt->get_cursor_x();
     uint16_t y = txt->get_cursor_y();
     
     // Set font before any operations
     gfx->setFont(txt->get_font());
     
-    // Apply display rotation and transform coordinates using the helper function
-    switch (rotation) {
-        case Rotation::ROT_90:
-            gfx->setRotation(1);
-            transform_coordinates(x, y, rotation);
-            break;
-        case Rotation::ROT_180:
-            gfx->setRotation(2);
-            transform_coordinates(x, y, rotation);
-            break;
-        case Rotation::ROT_270:
-            gfx->setRotation(3);
-            transform_coordinates(x, y, rotation);
-            break;
-        case Rotation::ROT_0:
-        default:
-            gfx->setRotation(0);
-            // No coordinate transformation needed for 0° rotation
-            break;
-    }
+    // Apply display rotation using cached setter - Arduino GFX handles coordinate transformation automatically
+    set_gfx_rotation_cached(rotation);
     
+    // Use original coordinates - Arduino GFX will transform them based on rotation
     gfx->setCursor(x, y);
     
     String text = txt->get_txt();
     gfx->println(text);
     
-    // Reset rotation for next operations
-    gfx->setRotation(0);
+    // Reset rotation for next operations (using cached setter)
+    set_gfx_rotation_cached(Rotation::ROT_0);
 }
 
 // Overloaded version for backward compatibility
+void Screen::draw_text(MediaContainer* txt, Rotation rotation) {
+    // Use default color when not specified
+    draw_text(txt, rotation, DICE_WHITE);
+}
+
+// Overloaded version for backward compatibility without rotation
 void Screen::draw_text(MediaContainer* txt) {
-    draw_text(txt, Rotation::ROT_0);
+    draw_text(txt, Rotation::ROT_0, DICE_WHITE);
 }
 
 void Screen::display_next() {
@@ -275,7 +294,8 @@ Screen::Screen()
         480 /* width */, 480 /* height */, rgbpanel, 0 /* rotation */, true /* auto_flush */, expander,
         GFX_NOT_DEFINED /* RST */, tl040wvs03_init_operations, sizeof(tl040wvs03_init_operations)))
     , screen_buffer((uint16_t*) ps_malloc(gfx->width() * gfx->height() * sizeof(uint16_t)))
-    , current_disp(nullptr) {
+    , current_disp(nullptr)
+    , current_gfx_rotation(Rotation::ROT_0) {  // Initialize rotation cache
 #ifdef GFX_EXTRA_PRE_INIT
     GFX_EXTRA_PRE_INIT();
 #endif

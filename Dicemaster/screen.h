@@ -22,6 +22,9 @@ private:
     MediaContainer* current_disp;
 
     int revolv_idx = 0;
+    
+    // Rotation caching for performance optimization
+    Rotation current_gfx_rotation = Rotation::ROT_0;
 
     bool is_next_ready();
     bool is_option_media(MediaContainer* med);
@@ -34,11 +37,13 @@ private:
     void draw_textgroup(MediaContainer* tg);
     void draw_text(MediaContainer* txt);
     void draw_text(MediaContainer* txt, Rotation rotation);
+    void draw_text(MediaContainer* txt, Rotation rotation, uint16_t text_color);
     void display_next();
     
     // Rotation helper functions
     void transform_coordinates(uint16_t& x, uint16_t& y, Rotation rotation);
     void set_display_rotation(Rotation rotation);
+    void set_gfx_rotation_cached(Rotation rotation);  // Cached rotation setter
 
 public:
     Screen();
