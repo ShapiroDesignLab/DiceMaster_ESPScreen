@@ -19,7 +19,8 @@ enum class MediaStatus : uint8_t {
 enum class SystemMode : uint8_t {
     TESTING = 0,
     DEMO = 1,
-    PRODUCTION = 2
+    PRODUCTION = 2,
+    SPI_DEBUG = 3
 };
 
 // Enums for Media Types
@@ -71,6 +72,10 @@ constexpr uint16_t DICE_WHITE = 0xFFFF;
 constexpr uint16_t DICE_RED = 0xF800;
 constexpr uint16_t DICE_GREEN = 0x07E0;
 constexpr uint16_t DICE_BLUE = 0x001F;
+constexpr uint16_t DICE_YELLOW = 0xFFE0;   // Yellow
+constexpr uint16_t DICE_CYAN = 0x07FF;     // Cyan
+constexpr uint16_t DICE_MAGENTA = 0xF81F;  // Magenta
+constexpr uint16_t DICE_ORANGE = 0xFD20;   // Orange
 
 enum class Command : uint8_t {
     BACKLIGHT_OFF =1,
@@ -111,7 +116,57 @@ enum class ErrorCode : uint8_t {
     OUT_OF_MEMORY = 0x07,
     INTERNAL_ERROR = 0x08,
     INVALID_OPTION_INDEX = 0x09,
-    UNSUPPORTED_MESSAGE = 0x0A
+    UNSUPPORTED_MESSAGE = 0x0A,
+    
+    // Header decoding errors
+    HEADER_TOO_SHORT = 0x10,
+    INVALID_SOF_MARKER = 0x11,
+    INVALID_MESSAGE_TYPE = 0x12,
+    INVALID_LENGTH_FIELD = 0x13,
+    HEADER_LENGTH_MISMATCH = 0x14,
+    
+    // TextBatch specific errors
+    TEXT_PAYLOAD_TOO_SHORT = 0x20,
+    TEXT_TOO_MANY_ITEMS = 0x21,
+    TEXT_INVALID_ROTATION = 0x22,
+    TEXT_ITEM_HEADER_TOO_SHORT = 0x23,
+    TEXT_ITEM_LENGTH_MISMATCH = 0x24,
+    TEXT_PAYLOAD_TRUNCATED = 0x25,
+    TEXT_LENGTH_CALCULATION_ERROR = 0x26,
+    
+    // ImageStart specific errors
+    IMAGE_START_TOO_SHORT = 0x30,
+    IMAGE_START_INVALID_ROTATION = 0x31,
+    IMAGE_START_INVALID_FORMAT = 0x32,
+    IMAGE_START_INVALID_RESOLUTION = 0x33,
+    
+    // ImageChunk specific errors
+    IMAGE_CHUNK_TOO_SHORT = 0x40,
+    IMAGE_CHUNK_DATA_TRUNCATED = 0x41,
+    IMAGE_CHUNK_INVALID_LENGTH = 0x42,
+    
+    // ImageEnd specific errors
+    IMAGE_END_TOO_SHORT = 0x50,
+    
+    // OptionList specific errors
+    OPTION_LIST_TOO_SHORT = 0x60,
+    OPTION_LIST_TOO_MANY_ENTRIES = 0x61,
+    OPTION_ENTRY_HEADER_TOO_SHORT = 0x62,
+    OPTION_ENTRY_TEXT_TRUNCATED = 0x63,
+    OPTION_LIST_LENGTH_MISMATCH = 0x64,
+    
+    // OptionUpdate specific errors
+    OPTION_UPDATE_TOO_SHORT = 0x70,
+    
+    // Ping specific errors
+    PING_REQUEST_NOT_EMPTY = 0x80,
+    PING_RESPONSE_TOO_SHORT = 0x81,
+    PING_RESPONSE_TEXT_TRUNCATED = 0x82,
+    
+    // Ack/Error specific errors
+    ACK_TOO_SHORT = 0x90,
+    ERROR_TOO_SHORT = 0x91,
+    ERROR_TEXT_TRUNCATED = 0x92
 };
 
 // SPI Protocol constants

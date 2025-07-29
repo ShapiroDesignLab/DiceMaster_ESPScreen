@@ -5,6 +5,7 @@
 #include "protocol.h"
 #include "screen.h"  // Include the actual Screen class definition
 #include "jpg.hs/umlogo_sq240.h"
+#include "constants.h"
 
 #include "jpg.hs/revolving_umlogo_12/rev_00.h"
 #include "jpg.hs/revolving_umlogo_12/rev_02.h"
@@ -22,15 +23,6 @@
 namespace dice {
 
 // ===================== COLOR CONSTANTS =====================
-
-// RGB565 color definitions for better demo colors
-constexpr uint16_t DICE_RED = 0xF800;      // Pure red
-constexpr uint16_t DICE_GREEN = 0x07E0;    // Pure green  
-constexpr uint16_t DICE_BLUE = 0x001F;     // Pure blue
-constexpr uint16_t DICE_YELLOW = 0xFFE0;   // Yellow
-constexpr uint16_t DICE_CYAN = 0x07FF;     // Cyan
-constexpr uint16_t DICE_MAGENTA = 0xF81F;  // Magenta
-constexpr uint16_t DICE_ORANGE = 0xFD20;   // Orange
 
 // ===================== DEMO IMAGE ARRAYS =====================
 
@@ -566,14 +558,14 @@ void run_demo_sequence(Screen* screen, int& revolving_counter) {
                 
             case 6:
                 Serial.println("Demo: Protocol ACK/ERROR test");
-                if (test_ack_error_protocol()) {
-                    MediaContainer* success_msg = print_success("ACK/ERROR Protocol Test PASSED");
-                    screen->enqueue(success_msg);
-                } else {
-                    MediaContainer* error_msg = print_error("ACK/ERROR Protocol Test FAILED");
-                    screen->enqueue(error_msg);
-                }
-                break;
+                // if (test_ack_error_protocol()) {
+                //     MediaContainer* success_msg = print_success("ACK/ERROR Protocol Test PASSED");
+                //     screen->enqueue(success_msg);
+                // } else {
+                //     MediaContainer* error_msg = print_error("ACK/ERROR Protocol Test FAILED");
+                //     screen->enqueue(error_msg);
+                // }
+                // break;
                 
             default:
                 demo_phase = -1; // Reset

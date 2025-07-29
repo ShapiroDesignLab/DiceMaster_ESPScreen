@@ -227,6 +227,10 @@ void Screen::draw_text(MediaContainer* txt, Rotation rotation, uint16_t text_col
     // Set font before any operations
     gfx->setFont(txt->get_font());
     
+    // Use individual text color - it now always contains the correct color from the protocol
+    uint16_t individual_color = txt->get_font_color();
+    gfx->setTextColor(individual_color);
+    
     // Apply display rotation using cached setter - Arduino GFX handles coordinate transformation automatically
     set_gfx_rotation_cached(rotation);
     
@@ -347,13 +351,15 @@ void Screen::update() {
     // If next is emergency like option, we dump enforced time rule
     // If next is ready and current image expires, we move on;
     if (!is_next_ready()) {   // If there is nothing to show, just return
+        // Serial.println("Nothing ready yet!");
         return;
     }
     if (current_disp == nullptr || current_disp->get_status() >= MediaStatus::EXPIRED) {
+        // Serial.println("Displaying next!");
         display_next();
         return;
     }
-    Serial.println("Not printing due to previous not expiring");
+    // Serial.println("Not printing due to previous not expiring");
 }
 
 // Utility functions

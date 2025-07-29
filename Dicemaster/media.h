@@ -131,10 +131,11 @@ private:
     String content;
     FontID font_id;
     const uint16_t cursor_x, cursor_y;
+    const uint16_t font_color;  // Individual font color for this text
 
 public:
-    Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy);
-    Text(char* input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy);
+    Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy, uint16_t color = 0xFFFF);
+    Text(char* input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy, uint16_t color = 0xFFFF);
     virtual ~Text() {}
 
     // APIs for Text
@@ -142,6 +143,7 @@ public:
     virtual uint16_t get_cursor_x() const;
     virtual uint16_t get_cursor_y() const;
     virtual String get_txt() const;
+    virtual uint16_t get_font_color() const;  // New method to get individual font color
 
     virtual FontID get_font_id() const;
 

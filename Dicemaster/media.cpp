@@ -38,21 +38,23 @@ void MediaContainer::trigger_display() {
 }
 
 
-Text::Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy)
+Text::Text(String input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy, uint16_t color)
     : MediaContainer(MediaType::TEXT, duration)
     , content(input)
     , font_id(ft_id)
     , cursor_x(cx)
-    , cursor_y(cy) {
+    , cursor_y(cy) 
+    , font_color(color) {
     set_status(MediaStatus::READY);
 }
 
-Text::Text(char* input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy)
+Text::Text(char* input, size_t duration, FontID ft_id, uint16_t cx, uint16_t cy, uint16_t color)
     : MediaContainer(MediaType::TEXT, duration)
     , content(String(input))
     , font_id(ft_id)
     , cursor_x(cx)
-    , cursor_y(cy) {
+    , cursor_y(cy)
+    , font_color(color) {
     set_status(MediaStatus::READY);
 }
 
@@ -68,6 +70,9 @@ uint16_t Text::get_cursor_y() const {
 }
 String Text::get_txt() const {
     return content;
+}
+uint16_t Text::get_font_color() const {
+    return font_color;
 }
 FontID Text::get_font_id() const {
     return font_id;

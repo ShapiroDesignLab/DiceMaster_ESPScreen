@@ -42,15 +42,17 @@ struct MessageHeader {
 struct TextItem {
     uint16_t x, y;
     uint8_t  font;
-    uint8_t  color;
+    uint16_t color;        // BYTE 5-6: Font Color (2 bytes)
     uint8_t  len;
     char     text[64];      // max 64 chars per line; adjust to taste
 };
 
 struct TextBatch {
-    uint8_t  itemCount;
-    uint8_t  rotation;      // 0=0°, 1=90°, 2=180°, 3=270°
-    TextItem items[10];     // max 10 lines; adjust to taste
+    uint16_t bgColor;       // BYTE 0-1: BG Color
+    uint16_t fontColor;     // BYTE 2-3: Font Color (deprecated - individual texts now have colors)
+    uint8_t  itemCount;     // BYTE 4: number of lines
+    uint8_t  rotation;      // BYTE 5: rotation (0=0°, 1=90°, 2=180°, 3=270°)
+    TextItem items[10];     // Starting at BYTE 6
 };
 
 // -------------------------  Image/GIF payloads -------------------------
@@ -170,12 +172,21 @@ inline void encodeHeader(uint8_t* out, MessageType t, uint8_t id, uint16_t len)
 
 inline ErrorCode decodeHeader(const uint8_t* buf, size_t sz, MessageHeader& h)
 {
-    if(sz < 5) return ErrorCode::INVALID_FORMAT;
-    if(buf[0] != ::SOF_MARKER) return ErrorCode::INVALID_FORMAT;  // Use global SOF_MARKER
+    if(sz < 5) return ErrorCode::HEADER_TOO_SHORT;
+    if(buf[0] != ::SOF_MARKER) return ErrorCode::INVALID_SOF_MARKER;
+    
+    // Validate message type
+    uint8_t msg_type = buf[1];
+    if(msg_type < 0x01 || msg_type > 0x0F) return ErrorCode::INVALID_MESSAGE_TYPE;
+    
     h.marker = buf[0];
-    h.type   = static_cast<MessageType>(buf[1]);
+    h.type   = static_cast<MessageType>(msg_type);
     h.id     = buf[2];
     h.length = static_cast<uint16_t>(readBE(buf+3, 2));
+    
+    // Validate that we have enough data for the claimed payload length
+    if(sz < 5 + h.length) return ErrorCode::HEADER_LENGTH_MISMATCH;
+    
     return ErrorCode::SUCCESS;
 }
 
@@ -186,18 +197,20 @@ inline ErrorCode decodeHeader(const uint8_t* buf, size_t sz, MessageHeader& h)
 // Text batch encoder
 inline size_t encodeTextBatch(uint8_t* out, const TextBatch& tb)
 {
-    out[0] = tb.itemCount;
-    out[1] = tb.rotation;
-    size_t offset = 2;
+    writeBE(out, tb.bgColor, 2);      // BYTE 0-1: BG Color
+    writeBE(out + 2, tb.fontColor, 2); // BYTE 2-3: Font Color
+    out[4] = tb.itemCount;            // BYTE 4: number of lines
+    out[5] = tb.rotation;             // BYTE 5: rotation
+    size_t offset = 6;
     
     for(uint8_t i = 0; i < tb.itemCount; ++i) {
         const TextItem& item = tb.items[i];
-        writeBE(out + offset, item.x, 2);
-        writeBE(out + offset + 2, item.y, 2);
-        out[offset + 4] = item.font;
-        out[offset + 5] = item.color;
-        out[offset + 6] = item.len;
-        offset += 7;
+        writeBE(out + offset, item.x, 2);        // BYTE 0-1: x cursor
+        writeBE(out + offset + 2, item.y, 2);    // BYTE 2-3: y cursor
+        out[offset + 4] = item.font;             // BYTE 4: font id
+        writeBE(out + offset + 5, item.color, 2); // BYTE 5-6: Font Color (2 bytes)
+        out[offset + 7] = item.len;              // BYTE 7: text length
+        offset += 8;
         
         memcpy(out + offset, item.text, item.len);
         offset += item.len;
@@ -361,54 +374,79 @@ inline size_t encode(uint8_t* buffer, size_t bufferSize, const Message& msg)
 // Text batch decoder
 inline ErrorCode decodeTextBatch(const uint8_t* p, size_t len, TextBatch& tb)
 {
-    if(len < 2) return ErrorCode::INVALID_FORMAT;
-    tb.itemCount = p[0];
-    tb.rotation = p[1];
-    if(tb.itemCount > 10) return ErrorCode::OUT_OF_MEMORY;
-    if(tb.rotation > 3) return ErrorCode::INVALID_FORMAT;
+    if(len < 6) return ErrorCode::TEXT_PAYLOAD_TOO_SHORT;
     
-    size_t offset = 2;
+    tb.bgColor = static_cast<uint16_t>(readBE(p, 2));      // BYTE 0-1: BG Color
+    tb.fontColor = static_cast<uint16_t>(readBE(p + 2, 2)); // BYTE 2-3: Font Color
+    tb.itemCount = p[4];                                   // BYTE 4: number of lines
+    tb.rotation = p[5];                                    // BYTE 5: rotation
+    
+    if(tb.itemCount > 10) return ErrorCode::TEXT_TOO_MANY_ITEMS;
+    if(tb.rotation > 3) return ErrorCode::TEXT_INVALID_ROTATION;
+    
+    size_t offset = 6;
+    Serial.println("[TEXT BATCH] Decoding TextBatch with " + String(tb.itemCount) + " items at " + String(len) + " bytes");
     for(uint8_t i = 0; i < tb.itemCount; ++i) {
-        if(offset + 7 > len) return ErrorCode::INVALID_FORMAT;
-        TextItem& item = tb.items[i];
-        item.x = static_cast<uint16_t>(readBE(p + offset, 2));
-        item.y = static_cast<uint16_t>(readBE(p + offset + 2, 2));
-        item.font = p[offset + 4];
-        item.color = p[offset + 5];
-        item.len = p[offset + 6];
-        offset += 7;
+        Serial.println("[TEXT BATCH] Decoding item " + String(i));
+        if(offset + 8 > len) return ErrorCode::TEXT_ITEM_HEADER_TOO_SHORT;
         
-        if(offset + item.len > len) return ErrorCode::INVALID_FORMAT;
+        TextItem& item = tb.items[i];
+        item.x = static_cast<uint16_t>(readBE(p + offset, 2));     // BYTE 0-1: x cursor
+        item.y = static_cast<uint16_t>(readBE(p + offset + 2, 2)); // BYTE 2-3: y cursor
+        item.font = p[offset + 4];                                 // BYTE 4: font id
+        item.color = static_cast<uint16_t>(readBE(p + offset + 5, 2)); // BYTE 5-6: Font Color (2 bytes)
+        item.len = p[offset + 7];                                  // BYTE 7: text length
+        offset += 8;
+        
+        if(offset + item.len > len) return ErrorCode::TEXT_ITEM_LENGTH_MISMATCH;
+        if(item.len > 64) return ErrorCode::TEXT_PAYLOAD_TRUNCATED;  // Max text length check
+        
         memcpy(item.text, p + offset, item.len);
         item.text[item.len] = '\0'; // null terminate
         offset += item.len;
     }
-    return (offset == len) ? ErrorCode::SUCCESS : ErrorCode::INVALID_FORMAT;
+    
+    return (offset == len) ? ErrorCode::SUCCESS : ErrorCode::TEXT_LENGTH_CALCULATION_ERROR;
 }
 
 // Image start decoder
 inline ErrorCode decodeImageStart(const uint8_t* p, size_t len, ImageStart& is)
 {
-    if(len < 8) return ErrorCode::INVALID_FORMAT;
+    if(len < 8) return ErrorCode::IMAGE_START_TOO_SHORT;
+    
     is.imgId = p[0];
     is.fmtRes = p[1];
     is.delayMs = p[2];
     is.totalSize = readBE(p + 3, 3); // 24-bit
     is.numChunks = p[6];
     is.rotation = p[7];
-    if(is.rotation > 3) return ErrorCode::INVALID_FORMAT;
+    
+    if(is.rotation > 3) return ErrorCode::IMAGE_START_INVALID_ROTATION;
+    
+    // Validate format (upper 4 bits)
+    uint8_t format = (is.fmtRes >> 4) & 0x0F;
+    if(format == 0 || format > 3) return ErrorCode::IMAGE_START_INVALID_FORMAT;
+    
+    // Validate resolution (lower 4 bits)
+    uint8_t resolution = is.fmtRes & 0x0F;
+    if(resolution == 0 || resolution > 2) return ErrorCode::IMAGE_START_INVALID_RESOLUTION;
+    
     return ErrorCode::SUCCESS;
 }
 
 // Image chunk decoder
 inline ErrorCode decodeImageChunk(const uint8_t* p, size_t len, ImageChunk& ic)
 {
-    if(len < 7) return ErrorCode::INVALID_FORMAT;
+    if(len < 7) return ErrorCode::IMAGE_CHUNK_TOO_SHORT;
+    
     ic.imgId = p[0];
     ic.chunkId = p[1];
     ic.offset = readBE(p + 2, 3); // 24-bit for image
     ic.length = static_cast<uint16_t>(readBE(p + 5, 2));
-    if(len < 7 + ic.length) return ErrorCode::INVALID_FORMAT;
+    
+    if(ic.length == 0) return ErrorCode::IMAGE_CHUNK_INVALID_LENGTH;
+    if(len < 7 + ic.length) return ErrorCode::IMAGE_CHUNK_DATA_TRUNCATED;
+    
     ic.data = p + 7;
     return ErrorCode::SUCCESS;
 }
@@ -416,7 +454,7 @@ inline ErrorCode decodeImageChunk(const uint8_t* p, size_t len, ImageChunk& ic)
 // Image end decoder
 inline ErrorCode decodeImageEnd(const uint8_t* p, size_t len, ImageEnd& ie)
 {
-    if(len < 1) return ErrorCode::INVALID_FORMAT;
+    if(len < 1) return ErrorCode::IMAGE_END_TOO_SHORT;
     ie.imgId = p[0];
     return ErrorCode::SUCCESS;
 }
@@ -424,13 +462,15 @@ inline ErrorCode decodeImageEnd(const uint8_t* p, size_t len, ImageEnd& ie)
 // Option list decoder
 inline ErrorCode decodeOptionList(const uint8_t* p, size_t len, OptionList& ol)
 {
-    if(len < 1) return ErrorCode::INVALID_FORMAT;
+    if(len < 1) return ErrorCode::OPTION_LIST_TOO_SHORT;
+    
     ol.entryCount = p[0];
-    if(ol.entryCount > 12) return ErrorCode::OUT_OF_MEMORY;
+    if(ol.entryCount > 12) return ErrorCode::OPTION_LIST_TOO_MANY_ENTRIES;
     
     size_t offset = 1;
     for(uint8_t i = 0; i < ol.entryCount; ++i) {
-        if(offset + 6 > len) return ErrorCode::INVALID_FORMAT;
+        if(offset + 6 > len) return ErrorCode::OPTION_ENTRY_HEADER_TOO_SHORT;
+        
         OptionEntry& entry = ol.entries[i];
         entry.selected = p[offset];
         entry.x = static_cast<uint16_t>(readBE(p + offset + 1, 2));
@@ -438,18 +478,21 @@ inline ErrorCode decodeOptionList(const uint8_t* p, size_t len, OptionList& ol)
         entry.len = p[offset + 5];
         offset += 6;
         
-        if(offset + entry.len > len) return ErrorCode::INVALID_FORMAT;
+        if(offset + entry.len > len) return ErrorCode::OPTION_ENTRY_TEXT_TRUNCATED;
+        if(entry.len > 255) return ErrorCode::OPTION_ENTRY_TEXT_TRUNCATED;  // Sanity check
+        
         memcpy(entry.text, p + offset, entry.len);
         entry.text[entry.len] = '\0'; // null terminate
         offset += entry.len;
     }
-    return (offset == len) ? ErrorCode::SUCCESS : ErrorCode::INVALID_FORMAT;
+    
+    return (offset == len) ? ErrorCode::SUCCESS : ErrorCode::OPTION_LIST_LENGTH_MISMATCH;
 }
 
 // Option selection update decoder
 inline ErrorCode decodeOptionUpdate(const uint8_t* p, size_t len, OptionSelectionUpdate& osu)
 {
-    if(len < 1) return ErrorCode::INVALID_FORMAT;
+    if(len < 1) return ErrorCode::OPTION_UPDATE_TOO_SHORT;
     osu.index = p[0];
     return ErrorCode::SUCCESS;
 }
@@ -458,16 +501,20 @@ inline ErrorCode decodeOptionUpdate(const uint8_t* p, size_t len, OptionSelectio
 inline ErrorCode decodePingRequest(const uint8_t* p, size_t len, PingRequest& pr)
 {
     (void)p; (void)pr; // Suppress unused warnings
-    return (len == 0) ? ErrorCode::SUCCESS : ErrorCode::INVALID_FORMAT;
+    return (len == 0) ? ErrorCode::SUCCESS : ErrorCode::PING_REQUEST_NOT_EMPTY;
 }
 
 // Ping response decoder
 inline ErrorCode decodePingResponse(const uint8_t* p, size_t len, PingResponse& pr)
 {
-    if(len < 2) return ErrorCode::INVALID_FORMAT;
+    if(len < 2) return ErrorCode::PING_RESPONSE_TOO_SHORT;
+    
     pr.status = p[0];
     pr.len = p[1];
-    if(len < 2 + pr.len) return ErrorCode::INVALID_FORMAT;
+    
+    if(len < 2 + pr.len) return ErrorCode::PING_RESPONSE_TEXT_TRUNCATED;
+    if(pr.len > 255) return ErrorCode::PING_RESPONSE_TEXT_TRUNCATED;  // Sanity check
+    
     memcpy(pr.text, p + 2, pr.len);
     pr.text[pr.len] = '\0'; // null terminate
     return ErrorCode::SUCCESS;
@@ -476,7 +523,7 @@ inline ErrorCode decodePingResponse(const uint8_t* p, size_t len, PingResponse& 
 // Ack decoder
 inline ErrorCode decodeAck(const uint8_t* p, size_t len, Ack& ack)
 {
-    if(len < 1) return ErrorCode::INVALID_FORMAT;
+    if(len < 1) return ErrorCode::ACK_TOO_SHORT;
     ack.status = static_cast<ErrorCode>(p[0]);
     return ErrorCode::SUCCESS;
 }
@@ -484,10 +531,14 @@ inline ErrorCode decodeAck(const uint8_t* p, size_t len, Ack& ack)
 // Error decoder
 inline ErrorCode decodeError(const uint8_t* p, size_t len, Error& err)
 {
-    if(len < 2) return ErrorCode::INVALID_FORMAT;
+    if(len < 2) return ErrorCode::ERROR_TOO_SHORT;
+    
     err.code = static_cast<ErrorCode>(p[0]);
     err.len = p[1];
-    if(len < 2 + err.len) return ErrorCode::INVALID_FORMAT;
+    
+    if(len < 2 + err.len) return ErrorCode::ERROR_TEXT_TRUNCATED;
+    if(err.len > 255) return ErrorCode::ERROR_TEXT_TRUNCATED;  // Sanity check
+    
     memcpy(err.text, p + 2, err.len);
     err.text[err.len] = '\0'; // null terminate
     return ErrorCode::SUCCESS;
@@ -502,7 +553,8 @@ inline ErrorCode decode(const uint8_t* buffer, size_t bufferSize, Message& msg)
     ErrorCode result = decodeHeader(buffer, bufferSize, msg.hdr);
     if(result != ErrorCode::SUCCESS) return result;
     
-    if(bufferSize < 5 + msg.hdr.length) return ErrorCode::INVALID_FORMAT;
+    // Header validation already checks this, but double-check for safety
+    if(bufferSize < 5 + msg.hdr.length) return ErrorCode::HEADER_LENGTH_MISMATCH;
     
     const uint8_t* payload = buffer + 5;
     size_t payloadLen = msg.hdr.length;

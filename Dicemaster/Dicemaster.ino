@@ -10,7 +10,9 @@ SPIDriver* spid;
 TestSuite* test_suite;
 
 // System mode configuration
-SystemMode current_mode = SystemMode::DEMO;  // Set current operating mode
+// Available modes: TESTING, DEMO, PRODUCTION, SPI_DEBUG
+// Change to SystemMode::PRODUCTION for normal operation
+SystemMode current_mode = SystemMode::PRODUCTION;  // Set current operating mode
 int revolving_counter = 0;  // Counter for revolving animation demo
 
 void setup(void){	
@@ -37,13 +39,14 @@ void setup(void){
 		}
 		screen->enqueue(startup_logo);
 		screen->update();
-		delay(2000); // Show logo for 2 seconds
 	}
 	
 	Serial.println("=== DiceMaster System Ready ===");
 	Serial.println("Current mode: " + String(current_mode == SystemMode::DEMO ? "DEMO" : 
-	                                         current_mode == SystemMode::TESTING ? "TESTING" : "PRODUCTION"));
+	                                         current_mode == SystemMode::TESTING ? "TESTING" : 
+	                                         current_mode == SystemMode::SPI_DEBUG ? "SPI_DEBUG" : "PRODUCTION"));
 	Serial.println("System initialized successfully.");
+	delay(1000); // Show logo for 2 seconds
 }
 
 void loop() {
@@ -68,10 +71,17 @@ void loop() {
 			// ===============================
 			run_production_mode();
 			break;
+			
+		case SystemMode::SPI_DEBUG:
+			// ===============================
+			// SPI DEBUG MODE - Display raw hex data
+			// ===============================
+			run_spi_debug_mode();
+			break;
 	}
 	
 	// Check buttons for manual interactions
-	handle_button_presses();
+	// handle_button_presses();
 }
 
 // ===============================
@@ -106,10 +116,10 @@ void run_testing_mode() {
 	}
 	
 	// After tests complete, run normal SPI operation
-	spid->queue_cmd_msgs();
+	spid->queueTransaction();
 	screen->update();
 	
-	std::vector<MediaContainer*> new_content = spid->process_msgs();
+	std::vector<MediaContainer*> new_content = spid->poll();
 	for (size_t i = 0; i < new_content.size(); ++i) {
 		screen->enqueue(new_content[i]);
 	}
@@ -119,47 +129,65 @@ void run_testing_mode() {
 
 void run_production_mode() {
 	// Pure SPI operation mode - no tests or demos
-	spid->queue_cmd_msgs();
+
+	// Serial.println("Working loop!");
+
+	spid->queueTransaction();
 	screen->update();
 	
-	std::vector<MediaContainer*> new_content = spid->process_msgs();
+	std::vector<MediaContainer*> new_content = spid->poll();
+	// if (new_content.size() > 0)
+	// Serial.println(new_content.size());
 	for (size_t i = 0; i < new_content.size(); ++i) {
 		screen->enqueue(new_content[i]);
 	}
-	
-	delay(1);
+	delay(5);
 }
 
-void handle_button_presses() {
-	static unsigned long last_button_time = 0;
-	static bool mode_switching_enabled = true;
+void run_spi_debug_mode() {
+	// SPI Debug mode - display raw hex bytes received
+	static bool debug_initialized = false;
+	static unsigned long last_status_update = 0;
+	static int no_data_counter = 0;
 	
-	// Both buttons pressed - cycle through modes
-	if (screen->down_button_pressed() && screen->up_button_pressed()) {
-		if (millis() - last_button_time > 1000 && mode_switching_enabled) { // 1 second debounce
-			switch (current_mode) {
-				case SystemMode::DEMO:
-					current_mode = SystemMode::TESTING;
-					Serial.println("=== SWITCHED TO TESTING MODE ===");
-					break;
-				case SystemMode::TESTING:
-					current_mode = SystemMode::PRODUCTION;
-					Serial.println("=== SWITCHED TO PRODUCTION MODE ===");
-					break;
-				case SystemMode::PRODUCTION:
-					current_mode = SystemMode::DEMO;
-					Serial.println("=== SWITCHED TO DEMO MODE ===");
-					break;
-			}
-			last_button_time = millis();
+	if (!debug_initialized) {
+		Serial.println("Initializing SPI debug mode...");
+		Serial.println("Will display received SPI bytes as hex on screen");
+		
+		// Display initial status on screen
+		auto* status_group = new TextGroup(0, DICE_BLACK, DICE_GREEN);
+		Text* status_text = new Text("SPI DEBUG MODE\nWaiting for data...", 5000, FontID::TF, 50, 200);
+		status_group->add_member(status_text);
+		screen->enqueue(status_group);
+		
+		debug_initialized = true;
+		last_status_update = millis();
+	}
+	
+	// Queue SPI transaction
+	spid->queueTransaction();
+	
+	// Poll for debug hex data
+	MediaContainer* hex_data = spid->pollDebugHex();
+	if (hex_data != nullptr) {
+		screen->enqueue(hex_data);
+		no_data_counter = 0;  // Reset counter when we get data
+	} else {
+		no_data_counter++;
+		
+		// Show periodic status updates when no data is received
+		if (millis() - last_status_update > 5000) {  // Every 5 seconds
+			auto* status_group = new TextGroup(0, DICE_BLACK, DICE_WHITE);
+			String status_msg = "SPI DEBUG MODE\nWaiting for data...\nNo data cycles: " + String(no_data_counter);
+			Text* status_text = new Text(status_msg, 2000, FontID::TF, 50, 200);
+			status_group->add_member(status_text);
+			screen->enqueue(status_group);
+			last_status_update = millis();
 		}
 	}
-	// Single button press - trigger test suite in any mode
-	else if (screen->down_button_pressed() && !screen->up_button_pressed()) {
-		if (millis() - last_button_time > 1000) {
-			Serial.println("Down button pressed - running demo tests!");
-			test_suite->run_demo_tests();
-			last_button_time = millis();
-		}
-	}
+	
+	// Update screen
+	screen->update();
+	
+	delay(10);  // Small delay to prevent overwhelming the display
 }
