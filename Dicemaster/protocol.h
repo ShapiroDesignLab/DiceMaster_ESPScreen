@@ -59,7 +59,7 @@ struct TextBatch {
 struct ImageStart {
     uint8_t  imgId;
     uint8_t  fmtRes;        // 4-bit format | 4-bit res
-    uint8_t  delayMs;
+    uint16_t  delayMs;
     uint32_t totalSize;     // 24-bit in packet, 32-bit here
     uint8_t  numChunks;
     uint8_t  rotation;      // 0=0°, 1=90°, 2=180°, 3=270°
@@ -221,13 +221,13 @@ inline size_t encodeTextBatch(uint8_t* out, const TextBatch& tb)
 // Image start encoder
 inline size_t encodeImageStart(uint8_t* out, const ImageStart& is)
 {
-    out[0] = is.imgId;
-    out[1] = is.fmtRes;
-    out[2] = is.delayMs;
-    writeBE(out + 3, is.totalSize, 3);
-    out[6] = is.numChunks;
-    out[7] = is.rotation;
-    return 8;
+    out[0] = is.imgId;                     // BYTE 0: image ID
+    out[1] = is.fmtRes;                    // BYTE 1: 4-bit Format, 4-bit Resolution
+    writeBE(out + 2, is.delayMs, 2);      // BYTE 2-3: Delay Time (2 bytes)
+    writeBE(out + 4, is.totalSize, 3);    // BYTE 4-6: total image size (3 bytes)
+    out[7] = is.numChunks;                 // BYTE 7: num chunks
+    out[8] = is.rotation;                  // BYTE 8: rotation
+    return 9;
 }
 
 // Image chunk encoder
@@ -412,20 +412,23 @@ inline ErrorCode decodeTextBatch(const uint8_t* p, size_t len, TextBatch& tb)
 // Image start decoder
 inline ErrorCode decodeImageStart(const uint8_t* p, size_t len, ImageStart& is)
 {
-    if(len < 8) return ErrorCode::IMAGE_START_TOO_SHORT;
+    if(len < 9) return ErrorCode::IMAGE_START_TOO_SHORT;  // Updated to 9 bytes
     
-    is.imgId = p[0];
-    is.fmtRes = p[1];
-    is.delayMs = p[2];
-    is.totalSize = readBE(p + 3, 3); // 24-bit
-    is.numChunks = p[6];
-    is.rotation = p[7];
+    is.imgId = p[0];                               // BYTE 0: image ID
+    is.fmtRes = p[1];                              // BYTE 1: 4-bit Format, 4-bit Resolution
+    is.delayMs = static_cast<uint16_t>(readBE(p + 2, 2)); // BYTE 2-3: Delay Time (2 bytes)
+    is.totalSize = readBE(p + 4, 3);              // BYTE 4-6: total image size (3 bytes)
+    is.numChunks = p[7];                          // BYTE 7: num chunks  
+    is.rotation = p[8];                           // BYTE 8: rotation
     
     if(is.rotation > 3) return ErrorCode::IMAGE_START_INVALID_ROTATION;
     
     // Validate format (upper 4 bits)
     uint8_t format = (is.fmtRes >> 4) & 0x0F;
-    if(format == 0 || format > 3) return ErrorCode::IMAGE_START_INVALID_FORMAT;
+    if(format == 0 || format > 3) {
+        Serial.println("[SPI ERROR] Invalid image format: " + String(format));
+        return ErrorCode::IMAGE_START_INVALID_FORMAT;
+    }
     
     // Validate resolution (lower 4 bits)
     uint8_t resolution = is.fmtRes & 0x0F;

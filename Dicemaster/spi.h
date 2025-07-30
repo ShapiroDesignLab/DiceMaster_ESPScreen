@@ -13,9 +13,9 @@
 namespace dice {
 
 // SPI Buffer Sizes
-constexpr size_t SPI_MOSI_BUFFER_SIZE = 4096;  // Adjust as needed
+constexpr size_t SPI_MOSI_BUFFER_SIZE = 32768;  // Adjust as needed
 constexpr size_t SPI_MISO_BUFFER_SIZE = 256;   // For ACK/NACK messages
-constexpr size_t QUEUE_SIZE = 1;
+constexpr size_t QUEUE_SIZE = 10;
 
 class SPIDriver {
 private:
@@ -114,7 +114,7 @@ inline void SPIDriver::queueTransaction()
 {
     if (slave.hasTransactionsCompletedAndAllResultsHandled()) {
         Serial.println("Handling!!!");
-        slave.queue(dma_tx_buf, dma_rx_buf, SPI_MOSI_BUFFER_SIZE);
+        slave.queue(NULL, dma_rx_buf, SPI_MOSI_BUFFER_SIZE);
         slave.trigger();
     }
 }
@@ -125,12 +125,17 @@ inline std::vector<MediaContainer*> SPIDriver::poll()
 {
     std::vector<MediaContainer*> ready;
 
-    if (!slave.hasTransactionsCompletedAndAllResultsReady(QUEUE_SIZE))
+    // if (!slave.hasTransactionsCompletedAndAllResultsReady(QUEUE_SIZE))
+    //     return ready;
+
+    if (slave.numTransactionsCompleted() == 0) {
+        // Serial.println("[SPI POLL] No completed transactions to process");
         return ready;
+    }
 
     const std::vector<size_t> sizes = slave.numBytesReceivedAll();
     size_t offset = 0;
-
+    Serial.println("[SPI POLL] Received " + String(sizes.size()) + " transactions");
     for (size_t sz : sizes)
     {
         const uint8_t* buf = dma_rx_buf + offset;
@@ -365,8 +370,10 @@ inline MediaContainer* SPIDriver::pollDebugHex()
 {
     static int message_counter = 0;  // Track total messages received
     
-    if (!slave.hasTransactionsCompletedAndAllResultsReady(QUEUE_SIZE))
+    if (slave.numTransactionsCompleted() == 0) {
+        // Serial.println("[SPI DEBUG] No completed transactions to process");
         return nullptr;
+    }
 
     const std::vector<size_t> sizes = slave.numBytesReceivedAll();
     if (sizes.empty() || sizes[0] == 0) 

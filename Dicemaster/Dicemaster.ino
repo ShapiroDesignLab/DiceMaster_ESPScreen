@@ -12,7 +12,7 @@ TestSuite* test_suite;
 // System mode configuration
 // Available modes: TESTING, DEMO, PRODUCTION, SPI_DEBUG
 // Change to SystemMode::PRODUCTION for normal operation
-SystemMode current_mode = SystemMode::PRODUCTION;  // Set current operating mode
+SystemMode current_mode = SystemMode::SPI_DEBUG;  // Set current operating mode
 int revolving_counter = 0;  // Counter for revolving animation demo
 
 void setup(void){	

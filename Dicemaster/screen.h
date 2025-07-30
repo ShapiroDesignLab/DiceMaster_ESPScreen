@@ -8,7 +8,6 @@
 #include <U8g2lib.h>
 #include "media.h"
 
-
 namespace dice {
 
 class Screen {

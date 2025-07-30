@@ -35,10 +35,8 @@ enum class MediaType : uint8_t {
 
 // Enums for Image Formats
 enum class ImageFormat : uint8_t {
-    NOIMG = 0,
     JPEG=1,
     RGB565=2,
-    RGB222=3
 };
 
 enum class ImageResolution: uint8_t {
