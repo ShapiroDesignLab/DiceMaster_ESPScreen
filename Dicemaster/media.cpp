@@ -267,7 +267,7 @@ void Image::startDecode() {
     // Serial.println("Task started");
 }
 
-Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, Rotation rot)
+Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, uint8_t num_chunks, Rotation rot)
     : MediaContainer(MediaType::IMAGE, duration)
     , image_id(img_id)
     , image_format(format)
@@ -278,9 +278,24 @@ Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t t
     , input_ptr(nullptr)
     , decoded_content(nullptr)
     , decodeTaskHandle(nullptr)
-    , chunks_received(0) {
+    , chunks_received(0)
+    , expected_chunks(num_chunks)
+    , chunk_received_mask(nullptr)
+    , transfer_start_time(0)
+    , chunk_timeout_ms(100 * num_chunks) {
     
-    Serial.println("[IMAGE] Constructor: img_id " + String(img_id));
+    Serial.println("[IMAGE] Constructor: img_id " + String(img_id) + ", expected chunks: " + String(num_chunks));
+    
+    // Allocate chunk tracking mask (1 byte can track up to 8 chunks, extend as needed)
+    size_t mask_size = (num_chunks + 7) / 8; // Round up to nearest byte
+    chunk_received_mask = (uint8_t*) malloc(mask_size);
+    if (chunk_received_mask) {
+        memset(chunk_received_mask, 0, mask_size);
+    } else {
+        Serial.println("[IMAGE] ERROR: Failed to allocate chunk tracking mask");
+        set_status(MediaStatus::EXPIRED);
+        return;
+    }
     
     // Check PSRAM availability for larger images
     if (total_img_size > 50000 && psramFound()) {
@@ -355,6 +370,12 @@ Image::~Image() {
         free(decoded_content);
         decoded_content = nullptr;
     }
+    
+    // Free chunk tracking mask
+    if (chunk_received_mask != nullptr) {
+        free(chunk_received_mask);
+        chunk_received_mask = nullptr;
+    }
 }
 
 uint16_t* Image::get_img() {
@@ -392,6 +413,121 @@ void Image::add_chunk(const uint8_t* chunk, size_t chunk_size) {
                    "/" + String(total_size) + " (" + String((received * 100) / total_size) + "%)");
 
     if (received == total_size) {
+        Serial.println("[IMAGE] Image " + String(image_id) + " complete: " + String(chunks_received) + 
+                       " chunks, " + String(total_size) + " bytes total");
+        
+        if (image_format == ImageFormat::JPEG) {
+            startDecode();
+        } else if (image_format == ImageFormat::RGB565) {
+            // For RGB565 bitmap, no decoding needed
+            size_t copy_size = min(total_size, SCREEN_PXLCNT * sizeof(uint16_t));
+            memcpy(decoded_content, content, copy_size);
+            set_status(MediaStatus::READY);
+        } else {
+            Serial.println("[IMAGE] ERROR: Unsupported format " + 
+                           String(static_cast<uint8_t>(image_format)) + " for ID " + String(image_id));
+            set_status(MediaStatus::EXPIRED);
+        }
+    }
+}
+
+// Override get_status to check for transfer timeout
+MediaStatus Image::get_status() {
+    // Check timeout first
+    if (check_transfer_timeout()) {
+        return MediaStatus::EXPIRED;
+    }
+    
+    // Call parent implementation for regular status checks
+    return MediaContainer::get_status();
+}
+
+bool Image::check_transfer_timeout() {
+    if (transfer_start_time == 0) {
+        return false; // No transfer started yet
+    }
+    
+    if (all_chunks_received()) {
+        return false; // All chunks received, no timeout
+    }
+    
+    unsigned long elapsed = millis() - transfer_start_time;
+    if (elapsed >= chunk_timeout_ms) {
+        Serial.println("[IMAGE] Transfer timeout for ID " + String(image_id) + 
+                       " - Expected: " + String(expected_chunks) + 
+                       " chunks, Received: " + String(chunks_received) + 
+                       " chunks after " + String(elapsed) + "ms");
+        set_status(MediaStatus::EXPIRED);
+        return true;
+    }
+    
+    return false;
+}
+
+void Image::mark_chunk_received(uint8_t chunk_id) {
+    if (!chunk_received_mask || chunk_id >= expected_chunks) {
+        return;
+    }
+    
+    // Set bit for this chunk
+    size_t byte_idx = chunk_id / 8;
+    uint8_t bit_idx = chunk_id % 8;
+    chunk_received_mask[byte_idx] |= (1 << bit_idx);
+    
+    // Start timeout tracking on first chunk
+    if (transfer_start_time == 0) {
+        transfer_start_time = millis();
+    }
+}
+
+bool Image::all_chunks_received() const {
+    if (!chunk_received_mask) {
+        return false;
+    }
+    
+    // Check all expected chunks are received
+    for (uint8_t chunk_id = 0; chunk_id < expected_chunks; chunk_id++) {
+        size_t byte_idx = chunk_id / 8;
+        uint8_t bit_idx = chunk_id % 8;
+        if (!(chunk_received_mask[byte_idx] & (1 << bit_idx))) {
+            return false; // This chunk not received yet
+        }
+    }
+    return true;
+}
+
+void Image::add_chunk_with_id(const uint8_t* chunk, size_t chunk_size, uint8_t chunk_id) {
+    if (!content || !input_ptr) {
+        Serial.println("[IMAGE] ERROR: Cannot add chunk - buffers not allocated for ID " + String(image_id));
+        return;
+    }
+    
+    // Mark this chunk as received
+    mark_chunk_received(chunk_id);
+    
+    if (input_ptr + chunk_size > content + total_size) {
+        Serial.println("[IMAGE] ERROR: Chunk overflow for ID " + String(image_id) + 
+                       " - Current: " + String(received_len()) + 
+                       ", Adding: " + String(chunk_size) + 
+                       ", Total: " + String(total_size));
+        set_status(MediaStatus::EXPIRED);
+        return;
+    }
+    
+    // Copy chunk data
+    memcpy(input_ptr, chunk, chunk_size);
+    input_ptr += chunk_size;
+    chunks_received++;
+    
+    size_t received = received_len();
+    
+    // Debug: Track chunk reception for each image
+    Serial.println("[CHUNK] Image " + String(image_id) + ": chunk " + String(chunk_id) + 
+                   " (" + String(chunk_size) + " bytes) - Total: " + String(received) + 
+                   "/" + String(total_size) + " (" + String((received * 100) / total_size) + "%)");
+
+    // Check if all chunks received or if we have complete data
+    if (all_chunks_received() || received == total_size) {
         Serial.println("[IMAGE] Image " + String(image_id) + " complete: " + String(chunks_received) + 
                        " chunks, " + String(total_size) + " bytes total");
         

@@ -101,7 +101,6 @@ private:
     MediaContainer* handle(const DProtocol::TextBatch& tb);
     MediaContainer* handle(const DProtocol::ImageStart& is);
     MediaContainer* handle(const DProtocol::ImageChunk& ic);
-    MediaContainer* handle(const DProtocol::ImageEnd& ie);
     
 public:
     DecodingHandler();
@@ -704,10 +703,6 @@ inline MediaContainer* DecodingHandler::decode_message(const DProtocol::Message&
             result = handle(msg.payload.u.imageChunk);
             break;
             
-        case DProtocol::TAG_IMAGE_END:
-            result = handle(msg.payload.u.imageEnd);
-            break;
-            
         case DProtocol::TAG_BACKLIGHT_ON:
         case DProtocol::TAG_BACKLIGHT_OFF:
             // Handle backlight control (no media container needed)
@@ -755,7 +750,7 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageStart& is) 
     // Only log for larger images or multiple chunks
     if (is.totalSize > 10000 || is.numChunks > 5) {
         Serial.println("[DECODE] Image ID " + String(is.imgId) + ": " + 
-                       String(is.totalSize) + "B, " + String(is.numChunks) + " chunks");
+                       String(is.totalSize) + "B, " + String(is.numChunks) + " chunks (includes embedded chunk 0)");
     }
     
     // Record expected chunks for this image
@@ -763,7 +758,9 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageStart& is) 
     received_chunks[is.imgId] = 0;
     transfer_start_time[is.imgId] = millis();
     
-    Image* img = new Image(is.imgId, fmt, res, is.totalSize, is.delayMs);
+    // Create image with new constructor that includes chunk count and rotation
+    Rotation rot = static_cast<Rotation>(is.rotation);
+    Image* img = new Image(is.imgId, fmt, res, is.totalSize, is.delayMs, is.numChunks, rot);
     if (img->get_status() == MediaStatus::EXPIRED) {
         Serial.println("[DECODE] ERROR: Failed to create image for ID " + String(is.imgId));
         expected_chunks.erase(is.imgId);
@@ -772,18 +769,31 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageStart& is) 
         return nullptr;
     }
     
-    // Debug: Verify image ID is set correctly
-    Serial.println("[DECODE] Created Image with ID " + String(is.imgId) + 
-                   ", virtual get_image_id(): " + String(img->get_image_id()) +
-                   ", direct get_image_id_direct(): " + String(img->get_image_id_direct()));
-    
-    // Store in map and verify virtual function still works
-    ongoing_transfers[is.imgId] = img;
-    MediaContainer* stored = ongoing_transfers[is.imgId];
-    Serial.println("[DECODE] After storing in map - virtual get_image_id(): " + String(stored->get_image_id()) +
-                   ", Media Type: " + String(static_cast<int>(stored->get_media_type())));
+    // Process embedded chunk 0 if present
+    if (is.embeddedChunk.length > 0 && is.embeddedChunk.data != nullptr) {
+        Serial.println("[DECODE] Processing embedded chunk 0 for ID " + String(is.imgId) + 
+                       " (" + String(is.embeddedChunk.length) + " bytes)");
+        img->add_chunk_with_id(is.embeddedChunk.data, is.embeddedChunk.length, 0);
+        received_chunks[is.imgId] = 1; // First chunk received
+    } else {
+        Serial.println("[DECODE] WARNING: No embedded chunk 0 data in ImageStart for ID " + String(is.imgId));
+        received_chunks[is.imgId] = 0; // No chunks received yet
+    }
     
     img->set_rotation(static_cast<Rotation>(is.rotation));
+    ongoing_transfers[is.imgId] = img;
+    
+    // Check if this was the only chunk (single-chunk image)
+    if (is.numChunks == 1) {
+        Serial.println("[DECODE] Single-chunk image complete for ID " + String(is.imgId));
+        MediaContainer* completed = img;
+        ongoing_transfers.erase(is.imgId);
+        expected_chunks.erase(is.imgId);
+        received_chunks.erase(is.imgId);
+        transfer_start_time.erase(is.imgId);
+        return completed;
+    }
+    
     return nullptr;
 }
 
@@ -797,7 +807,10 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageChunk& ic) 
     // Track received chunks (count of chunks received so far)
     uint8_t expected_total = expected_chunks.count(ic.imgId) ? expected_chunks[ic.imgId] : 0;
     uint8_t received_count = received_chunks[ic.imgId]; // Current count before increment
-    uint8_t expected_chunk_id = received_count; // 0-based: first chunk should be ID 0
+    // Note: chunk IDs start from 1 now since chunk 0 is embedded in ImageStart
+    // Since we start with received_count = 1 (chunk 0 already processed), 
+    // the first separate chunk should be ID 1, second should be ID 2, etc.
+    uint8_t expected_chunk_id = received_count; // Expected chunk ID = current received count
     
     // Debug: Track chunk sequence and detect gaps
     Serial.println("[CHUNK-SEQ] Image " + String(ic.imgId) + 
@@ -806,14 +819,16 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageChunk& ic) 
                    ", Length: " + String(ic.length) + " bytes" +
                    ", Progress: " + String(received_count + 1) + "/" + String(expected_total));
     
-    // Check for sequence gaps (chunks should be sequential starting from 0)
+    // Check for sequence gaps (chunks should be sequential starting from 1)
     if (ic.chunkId != expected_chunk_id) {
         Serial.println("[CHUNK-GAP] Image " + String(ic.imgId) + 
                        " - Expected chunk " + String(expected_chunk_id) + 
                        " but got " + String(ic.chunkId) + "!");
-        Serial.println("[CHUNK-MISSING] Image " + String(ic.imgId) + 
-                       " is missing chunks " + String(expected_chunk_id) + 
-                       " through " + String(ic.chunkId - 1));
+        if (ic.chunkId > expected_chunk_id) {
+            Serial.println("[CHUNK-MISSING] Image " + String(ic.imgId) + 
+                           " is missing chunks " + String(expected_chunk_id) + 
+                           " through " + String(ic.chunkId - 1));
+        }
     }
     
     // Increment received count after processing
@@ -825,58 +840,23 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageChunk& ic) 
         return nullptr;
     }
     
-    // Add the chunk data
-    img->add_chunk(ic.data, ic.length);
+    // Add the chunk data with ID tracking
+    img->add_chunk_with_id(ic.data, ic.length, ic.chunkId);
+    
+    // Check if transfer is complete (all chunks received)
+    if (received_chunks[ic.imgId] >= expected_total) {
+        Serial.println("[DECODE] Image ID " + String(ic.imgId) + " transfer complete: " + 
+                       String(received_chunks[ic.imgId]) + "/" + String(expected_total) + " chunks");
+        
+        MediaContainer* complete = img;
+        ongoing_transfers.erase(it);
+        expected_chunks.erase(ic.imgId);
+        received_chunks.erase(ic.imgId);
+        transfer_start_time.erase(ic.imgId);
+        return complete;
+    }
     
     return nullptr;
-}
-
-inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageEnd& ie) {
-    auto it = ongoing_transfers.find(ie.imgId);
-    if (it == ongoing_transfers.end()) {
-        Serial.println("[DECODE] ERROR: ImageEnd for unknown ID " + String(ie.imgId));
-        return nullptr;
-    }
-    
-    // Report final statistics for multi-chunk images
-    uint8_t expected = expected_chunks.count(ie.imgId) ? expected_chunks[ie.imgId] : 0;
-    uint8_t received = received_chunks.count(ie.imgId) ? received_chunks[ie.imgId] : 0;
-    
-    if (expected > 1) { // Only log for multi-chunk transfers
-        unsigned long transfer_time = millis() - transfer_start_time[ie.imgId];
-        Serial.println("[DECODE] Image ID " + String(ie.imgId) + " complete: " + 
-                       String(received) + "/" + String(expected) + " chunks in " + 
-                       String(transfer_time) + "ms");
-    }
-    
-    MediaContainer* complete = it->second;
-    ongoing_transfers.erase(it);
-    expected_chunks.erase(ie.imgId);
-    received_chunks.erase(ie.imgId);
-    transfer_start_time.erase(ie.imgId);
-    
-    if (received != expected && expected > 1) {
-        Serial.println("[DECODE] WARNING: Missing chunks for ID " + String(ie.imgId) + 
-                       " - Expected: " + String(expected) + ", Received: " + String(received));
-        
-        // Mark incomplete image as expired so it gets cleaned up instead of staying in limbo
-        complete->mark_expired();
-        Serial.println("[DECODE] Marked incomplete image ID " + String(ie.imgId) + " as EXPIRED");
-    }
-    
-    // Debug: Verify image ID before returning
-    if (complete->get_media_type() == MediaType::IMAGE) {
-        Image* img_ptr = static_cast<Image*>(complete);
-        Serial.println("[DECODE] Returning Image - Constructor ID: " + String(ie.imgId) + 
-                       ", Media Type: " + String(static_cast<int>(complete->get_media_type())) +
-                       ", virtual get_image_id(): " + String(complete->get_image_id()) + 
-                       ", direct get_image_id_direct(): " + String(img_ptr->get_image_id_direct()) +
-                       ", Object addr: 0x" + String((unsigned long)complete, HEX));
-    } else {
-        Serial.println("[DECODE] ERROR: Media type is NOT IMAGE! Type: " + String(static_cast<int>(complete->get_media_type())));
-    }
-    
-    return complete; // Return even if incomplete
 }
 
 } // namespace dice

@@ -56,15 +56,6 @@ struct TextBatch {
 };
 
 // -------------------------  Image/GIF payloads -------------------------
-struct ImageStart {
-    uint8_t  imgId;
-    uint8_t  fmtRes;        // 4-bit format | 4-bit res
-    uint16_t  delayMs;
-    uint32_t totalSize;     // 24-bit in packet, 32-bit here
-    uint8_t  numChunks;
-    uint8_t  rotation;      // 0=0°, 1=90°, 2=180°, 3=270°
-};
-
 struct ImageChunk {
     uint8_t  imgId;
     uint8_t  chunkId;
@@ -72,6 +63,17 @@ struct ImageChunk {
     uint16_t length;
     const uint8_t* data;    // pointer into original buffer
 };
+struct ImageStart {
+    uint8_t  imgId;
+    uint8_t  fmtRes;        // 4-bit format | 4-bit res
+    uint16_t  delayMs;
+    uint32_t totalSize;     // 24-bit in packet, 32-bit here
+    uint8_t  numChunks;
+    uint8_t  rotation;      // 0=0°, 1=90°, 2=180°, 3=270°
+    ImageChunk embeddedChunk; // Optional embedded chunk 0
+};
+
+
 
 struct ImageEnd { uint8_t imgId; };
 
@@ -399,7 +401,7 @@ inline ErrorCode decodeTextBatch(const uint8_t* p, size_t len, TextBatch& tb)
 // Image start decoder
 inline ErrorCode decodeImageStart(const uint8_t* p, size_t len, ImageStart& is)
 {
-    if(len < 9) return ErrorCode::IMAGE_START_TOO_SHORT;  // Updated to 9 bytes
+    if(len < 9) return ErrorCode::IMAGE_START_TOO_SHORT;  // Minimum 9 bytes for header
     
     is.imgId = p[0];                               // BYTE 0: image ID
     is.fmtRes = p[1];                              // BYTE 1: 4-bit Format, 4-bit Resolution
@@ -420,6 +422,23 @@ inline ErrorCode decodeImageStart(const uint8_t* p, size_t len, ImageStart& is)
     // Validate resolution (lower 4 bits)
     uint8_t resolution = is.fmtRes & 0x0F;
     if(resolution == 0 || resolution > 2) return ErrorCode::IMAGE_START_INVALID_RESOLUTION;
+    
+    // Extract embedded chunk 0 data (starts at BYTE 9)
+    if(len > 9) {
+        is.embeddedChunk.imgId = is.imgId;
+        is.embeddedChunk.chunkId = 0;  // This is chunk 0
+        is.embeddedChunk.offset = 0;   // Start at beginning of image
+        is.embeddedChunk.length = static_cast<uint16_t>(len - 9);  // Remaining data is chunk 0
+        is.embeddedChunk.data = p + 9;  // Pointer to chunk 0 data
+        Serial.println("[DECODE] ImageStart with embedded chunk 0: " + String(is.embeddedChunk.length) + " bytes");
+    } else {
+        is.embeddedChunk.imgId = is.imgId;
+        is.embeddedChunk.chunkId = 0;
+        is.embeddedChunk.offset = 0;
+        is.embeddedChunk.length = 0;
+        is.embeddedChunk.data = nullptr;
+        Serial.println("[DECODE] ImageStart with no embedded chunk data");
+    }
     
     return ErrorCode::SUCCESS;
 }

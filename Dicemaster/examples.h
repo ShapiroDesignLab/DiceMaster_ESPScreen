@@ -126,7 +126,7 @@ MediaContainer* get_demo_textgroup_rotated(Rotation rot) {
 MediaContainer* get_demo_image_rotated(Rotation rot) {
     try {
         Image* img = new Image(100 + static_cast<uint8_t>(rot), ImageFormat::JPEG, 
-                              ImageResolution::SQ240, umlogo_sq240_SIZE, 1500, rot); // Shorter duration for tests
+                              ImageResolution::SQ240, umlogo_sq240_SIZE, 1500, 1, rot); // 1 chunk, Shorter duration for tests
         img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
         return img;
     } catch (...) {
@@ -146,7 +146,7 @@ MediaContainer* get_demo_revolving_frame(uint8_t frame_index) {
     size_t img_size = revolving_umlogo_12_sizes[frame_index];
     
     try {
-        Image* img = new Image(frame_index, ImageFormat::JPEG, ImageResolution::SQ240, img_size, 100);
+        Image* img = new Image(frame_index, ImageFormat::JPEG, ImageResolution::SQ240, img_size, 100, 1, Rotation::ROT_0);
         img->add_chunk(img_data, img_size);
         return img;
     } catch (...) {
@@ -159,7 +159,7 @@ MediaContainer* get_demo_revolving_frame(uint8_t frame_index) {
  */
 MediaContainer* get_demo_startup_logo() {
     try {
-        Image* img = new Image(255, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 2000);
+        Image* img = new Image(255, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 2000, 1, Rotation::ROT_0);
         img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
         return img;
     } catch (...) {
@@ -452,7 +452,7 @@ MediaContainer* demo_revolving_animation(int& frame_counter) {
 MediaContainer* get_demo_rotated_logo(Rotation rotation) {
     try {
         Image* img = new Image(100 + static_cast<uint8_t>(rotation), ImageFormat::JPEG, 
-                              ImageResolution::SQ240, umlogo_sq240_SIZE, 1000, rotation);
+                              ImageResolution::SQ240, umlogo_sq240_SIZE, 1000, 1, rotation);
         img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
         return img;
     } catch (...) {

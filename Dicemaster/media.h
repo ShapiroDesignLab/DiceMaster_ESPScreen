@@ -85,8 +85,16 @@ private:
     uint16_t* decode_input_ptr;
     TaskHandle_t decodeTaskHandle;
 
-    // Chunk tracking for debugging
+    // Chunk tracking with timeout-based invalidation
     size_t chunks_received;
+    uint8_t expected_chunks;      // Total number of chunks expected
+    uint8_t* chunk_received_mask; // Bit mask to track which chunks were received
+    unsigned long transfer_start_time; // When the first chunk was received
+    unsigned long chunk_timeout_ms;    // Timeout for complete transfer (100ms * num_chunks)
+    
+    bool check_transfer_timeout();    // Check if transfer has timed out
+    void mark_chunk_received(uint8_t chunk_id); // Mark a specific chunk as received
+    bool all_chunks_received() const; // Check if all chunks have been received
 
     JPEGDEC jpeg;
     std::mutex decode_mtx;   // Mutex for thread-safe access
@@ -111,11 +119,13 @@ private:
     void startDecode();
 
 public:
-    Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, Rotation rot = Rotation::ROT_0);
+    Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, uint8_t num_chunks, Rotation rot = Rotation::ROT_0);
     virtual ~Image();
 
+    virtual MediaStatus get_status() override;  // Override to check timeout
     virtual uint16_t* get_img();
     virtual void add_chunk(const uint8_t* chunk, size_t chunk_size);
+    virtual void add_chunk_with_id(const uint8_t* chunk, size_t chunk_size, uint8_t chunk_id); // New method for chunk tracking
     virtual void add_decoded(const uint16_t* img);
     virtual uint8_t get_image_id() const {return image_id;};
     uint8_t get_image_id_direct() const {return image_id;};  // Direct access for debugging

@@ -381,7 +381,7 @@ int Screen::num_queued() {
 
 void Screen::draw_startup_logo() {
     try {
-      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 500);
+      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 500, 1, Rotation::ROT_0);
       int input_time = millis();
       med->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
       while (med->get_status() != MediaStatus::READY) {
@@ -402,7 +402,7 @@ void Screen::draw_revolving_logo() {
     const uint8_t* img_arr = revolving_umlogo_array[revolv_idx];
     int img_size = revolving_umlogo_sizes[revolv_idx];
     try {
-      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, img_size, 1);
+      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, img_size, 1, 1, Rotation::ROT_0);
       int input_time = millis();
       med->add_chunk(img_arr, img_size);
       while (med->get_status() != MediaStatus::READY) {

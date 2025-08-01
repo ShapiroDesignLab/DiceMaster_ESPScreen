@@ -488,7 +488,7 @@ private:
         delay(2500);
         
         // Example 2: Show actual image from memory
-        Image* img = new Image(128, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 2000, Rotation::ROT_0);
+        Image* img = new Image(128, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 2000, 1, Rotation::ROT_0);
         img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
         screen->enqueue(img);
         screen->update();

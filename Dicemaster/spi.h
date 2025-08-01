@@ -14,7 +14,7 @@
 namespace dice {
 
 // SPI Buffer Sizes and Configuration
-constexpr size_t SPI_MOSI_BUFFER_SIZE = 8192;  // Increased for larger messages
+constexpr size_t SPI_MOSI_BUFFER_SIZE = 8192;  // Increased to 8KB for larger messages
 constexpr size_t MAX_QUEUE_SIZE = 16;           // Maximum number of pre-queued transactions
 constexpr size_t DEFAULT_QUEUE_SIZE = 1;       // Default single transaction
 
@@ -157,13 +157,20 @@ inline bool SPIDriver::is_image_start_message(const uint8_t* data, size_t size) 
 
 inline uint8_t SPIDriver::extract_chunk_count(const uint8_t* data, size_t size) {
     if (size >= 13) {  // Need at least 13 bytes to access byte 12 (0-indexed)
-        return data[12];  // numChunks field
+        uint8_t total_chunks = data[12];  // numChunks field (includes embedded chunk 0)
+        // Subtract 1 since chunk 0 is embedded in ImageStart message
+        return total_chunks > 0 ? total_chunks - 1 : 0;
     }
-    return 1; // Default to 1 chunk if we can't extract
+    return 0; // No additional chunks needed if we can't extract or if only embedded chunk
 }
 
 inline void SPIDriver::queue_multiple_transactions(size_t count) {
-    Serial.println("[SPI] Pre-queueing " + String(count) + " transactions for fast transfer");
+    if (count == 0) {
+        Serial.println("[SPI] No additional transactions needed (chunk 0 embedded in ImageStart)");
+        return;
+    }
+    
+    Serial.println("[SPI] Pre-queueing " + String(count) + " additional transactions for fast transfer");
     
     size_t queued = 0;
     for (size_t i = 0; i < count && i < NUM_BUFFERS; i++) {
@@ -182,7 +189,7 @@ inline void SPIDriver::queue_multiple_transactions(size_t count) {
         slave.trigger();
         current_queue_size = queued;
         expected_transactions = count;
-        Serial.println("[SPI] Successfully pre-queued " + String(queued) + " transactions");
+        Serial.println("[SPI] Successfully pre-queued " + String(queued) + " additional transactions");
     }
 }
 
