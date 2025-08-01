@@ -35,6 +35,9 @@ public:
     virtual MediaStatus get_status();
 
     virtual void trigger_display();
+    
+    // Public method to mark media as expired (for incomplete transfers)
+    void mark_expired() { set_status(MediaStatus::EXPIRED); }
 
     // APIs for rotation support
     virtual Rotation get_rotation() const {return Rotation::ROT_0;}
@@ -50,7 +53,7 @@ public:
     virtual void add_chunk(const uint8_t* chunk, size_t chunk_size) {return;}
     virtual void add_decoded(const uint16_t* img) {return;}
     virtual uint16_t* get_img() {return nullptr;}
-    virtual uint8_t get_image_id() {return 0;}
+    virtual uint8_t get_image_id() {return 255;}
     virtual ImageResolution get_image_resolution() {return ImageResolution::SQ480;}
 
     // APIs for TextGroup
@@ -60,13 +63,6 @@ public:
     virtual uint16_t get_bg_color() const {return 0;}
     virtual uint16_t get_font_color() const {return 0;}
     virtual FontID get_font_id() const {return FontID::NOTEXT;}
-
-    // APIs for OptionGroup
-    // virtual std::vector<String> get_option_text(uint8_t id) const {return std::vector<String>();}
-    // virtual uint8_t get_selected_index() const {return 0;}
-    // virtual std::vector<String> get_option_text(uint8_t id) const {return std::vector<String>();}
-    // virtual void set_selected_index(uint8_t idx) {return;}
-    // virtual void add_option(String option_text) {return;}
 
     // // APIs for Controls
     // virtual void parse(uint8_t* payload, size_t payload_len);      //
@@ -88,6 +84,9 @@ private:
     uint16_t* decoded_content;
     uint16_t* decode_input_ptr;
     TaskHandle_t decodeTaskHandle;
+
+    // Chunk tracking for debugging
+    size_t chunks_received;
 
     JPEGDEC jpeg;
     std::mutex decode_mtx;   // Mutex for thread-safe access
@@ -118,11 +117,12 @@ public:
     virtual uint16_t* get_img();
     virtual void add_chunk(const uint8_t* chunk, size_t chunk_size);
     virtual void add_decoded(const uint16_t* img);
-    virtual uint8_t get_image_id() const;
-    virtual ImageFormat get_image_format() const;
-    virtual ImageResolution get_image_resolution() const;
-    virtual Rotation get_rotation() const;
-    virtual void set_rotation(Rotation rot);
+    virtual uint8_t get_image_id() const {return image_id;};
+    uint8_t get_image_id_direct() const {return image_id;};  // Direct access for debugging
+    virtual ImageFormat get_image_format() const {return image_format;};
+    virtual ImageResolution get_image_resolution() const {return resolution;};
+    virtual Rotation get_rotation() const {return rotation;};
+    virtual void set_rotation(Rotation rot) {rotation = rot;};
 };
 
 
@@ -190,30 +190,6 @@ public:
     virtual void set_rotation(Rotation rot);
 };
 
-
-// class OptionGroup : public MediaContainer {
-// private:
-//     std::vector<String> options;
-//     const uint8_t selected_index;
-
-// public:
-//     OptionGroup(const uint8_t sel);
-
-//     virtual void add_option(String option_text);
-//     virtual size_t size() const;
-//     virtual std::vector<String> get_option_text(uint8_t id) const;
-//     virtual uint8_t get_selected_index() const;
-//     virtual void set_selected_index(uint8_t idx);
-// };
-
-// class Control : public MediaContainer {
-// private:
-//     const uint8_t field;
-
-// public:
-//     OptionUpdate(const uint8_t new_id);
-//     virtual uint8_t get_selected_index() const;
-// };
 
 MediaContainer* get_demo_textgroup();
 MediaContainer* print_error(String input);

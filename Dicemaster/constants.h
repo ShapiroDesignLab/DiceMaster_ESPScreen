@@ -28,7 +28,6 @@ enum class MediaType : uint8_t {
     TEXT = 0,
     TEXTGROUP = 1,
     IMAGE = 2,
-    OPTION = 3,
     GIF = 5,
     CTRL = 255
 };
@@ -90,8 +89,6 @@ enum class MessageType : uint8_t {
     IMAGE_TRANSFER_START = 0x02,
     IMAGE_CHUNK = 0x03,
     IMAGE_TRANSFER_END = 0x04,
-    OPTION_LIST = 0x05,
-    OPTION_SELECTION_UPDATE = 0x06,
     GIF_TRANSFER_START = 0x07,
     GIF_FRAME = 0x08,
     GIF_TRANSFER_END = 0x09,
@@ -113,7 +110,6 @@ enum class ErrorCode : uint8_t {
     UNSUPPORTED_IMAGE_FORMAT = 0x06,
     OUT_OF_MEMORY = 0x07,
     INTERNAL_ERROR = 0x08,
-    INVALID_OPTION_INDEX = 0x09,
     UNSUPPORTED_MESSAGE = 0x0A,
     
     // Header decoding errors
@@ -146,16 +142,6 @@ enum class ErrorCode : uint8_t {
     // ImageEnd specific errors
     IMAGE_END_TOO_SHORT = 0x50,
     
-    // OptionList specific errors
-    OPTION_LIST_TOO_SHORT = 0x60,
-    OPTION_LIST_TOO_MANY_ENTRIES = 0x61,
-    OPTION_ENTRY_HEADER_TOO_SHORT = 0x62,
-    OPTION_ENTRY_TEXT_TRUNCATED = 0x63,
-    OPTION_LIST_LENGTH_MISMATCH = 0x64,
-    
-    // OptionUpdate specific errors
-    OPTION_UPDATE_TOO_SHORT = 0x70,
-    
     // Ping specific errors
     PING_REQUEST_NOT_EMPTY = 0x80,
     PING_RESPONSE_TOO_SHORT = 0x81,
@@ -169,6 +155,7 @@ enum class ErrorCode : uint8_t {
 
 // SPI Protocol constants
 constexpr uint8_t SOF_MARKER = 0x7E;
+constexpr uint8_t SOF_MARKER_REPLY = 0x7F;  // SOF + Type + ID + Length (2 bytes)
 
 // Empty structs for protocol compatibility
 struct BacklightOn {};

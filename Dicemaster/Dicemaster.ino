@@ -3,6 +3,7 @@
 #include "examples.h"  // New comprehensive examples
 #include "tests.h"     // New test suite
 #include "jpg.hs/umlogo_sq240.h"
+#include "esp_heap_caps.h"
 using namespace dice;
 
 Screen* screen;
@@ -28,6 +29,12 @@ void setup(void){
 	screen = new Screen();
 	test_suite = new TestSuite(screen, spid);  // Initialize test suite
 	
+	// Initialize SPI with callback-based processing
+	if (!spid->initialize()) {
+		Serial.println("Failed to initialize SPI driver!");
+		while(1) delay(1000); // Halt on failure
+	}
+	
 	// Show startup logo during initialization
 	Serial.println("Displaying startup logo...");
 	MediaContainer* startup_logo = get_demo_startup_logo();
@@ -50,6 +57,26 @@ void setup(void){
 }
 
 void loop() {
+	static unsigned long last_media_update = 0;
+	static unsigned long last_poll_time = 0;
+	static unsigned long last_loop_debug = 0;
+	const unsigned long MEDIA_UPDATE_INTERVAL = 16; // 60Hz (~16ms) - faster screen updates
+	const unsigned long POLL_INTERVAL = 1; // Poll SPI every 1ms for maximum responsiveness
+	
+	unsigned long now = millis();
+	
+	// Debug: Show that main loop is running
+	if (now - last_loop_debug > 5000) { // Every 5 seconds
+		Serial.println("[MAIN] Main loop running, last media update: " + String(now - last_media_update) + "ms ago");
+		last_loop_debug = now;
+	}
+	
+	// Poll SPI transactions at high frequency for fastest response (all modes)
+	if (now - last_poll_time >= POLL_INTERVAL) {
+		spid->poll_transactions();
+		last_poll_time = now;
+	}
+	
 	switch (current_mode) {
 		case SystemMode::DEMO:
 			// ===============================
@@ -74,14 +101,42 @@ void loop() {
 			
 		case SystemMode::SPI_DEBUG:
 			// ===============================
-			// SPI DEBUG MODE - Display raw hex data
+			// SPI DEBUG MODE - Display statistics
 			// ===============================
 			run_spi_debug_mode();
 			break;
 	}
 	
-	// Check buttons for manual interactions
-	// handle_button_presses();
+	// Update screen and process decoded media at 60Hz for all modes except DEMO
+	// (DEMO mode handles its own timing)
+	if (current_mode != SystemMode::DEMO) {
+		if (now - last_media_update >= MEDIA_UPDATE_INTERVAL) {
+			// Get decoded media from the decoding handler
+			std::vector<MediaContainer*> new_content = spid->get_decoded_media();
+			if (new_content.size() > 0) {
+				Serial.println("[MAIN] Retrieved " + String(new_content.size()) + " media items");
+				
+				// Debug: Log each retrieved image
+				for (size_t i = 0; i < new_content.size(); ++i) {
+					if (new_content[i]->get_media_type() == MediaType::IMAGE) {
+						Serial.println("[MAIN] Retrieved Image ID " + String(new_content[i]->get_image_id()) + 
+						               " - Status: " + String((int)new_content[i]->get_status()));
+					}
+					screen->enqueue(new_content[i]);
+				}
+			}
+				
+			// Update screen
+			if (screen->num_queued() > 0) {
+				screen->update();
+				// Serial.println("[MAIN] screen updated with remaining items: " + String(screen->num_queued()));
+			}
+			last_media_update = now;
+		}
+	}
+	
+	// Very small delay to prevent overwhelming the system but maintain responsiveness
+	delayMicroseconds(10);
 }
 
 // ===============================
@@ -98,10 +153,8 @@ void run_demo_mode() {
 	
 	// Delegate to demo management in examples.h
 	run_demo_sequence(screen, revolving_counter);
-	
-	// Update screen
-	screen->update();
-	delay(50);
+
+	screen->update();  // Update screen after running demo sequence
 }
 
 void run_testing_mode() {
@@ -115,79 +168,83 @@ void run_testing_mode() {
 		Serial.println("All tests finished. System ready for SPI operation.\n");
 	}
 	
-	// After tests complete, run normal SPI operation
-	spid->queueTransaction();
-	screen->update();
-	
-	std::vector<MediaContainer*> new_content = spid->poll();
-	for (size_t i = 0; i < new_content.size(); ++i) {
-		screen->enqueue(new_content[i]);
-	}
-	
-	delay(1);
+	// After tests complete, the main loop handles media processing at 30Hz
+	// No need to do anything here - SPI is running in background via callbacks
 }
 
 void run_production_mode() {
 	// Pure SPI operation mode - no tests or demos
-
-	// Serial.println("Working loop!");
-
-	spid->queueTransaction();
-	screen->update();
+	// SPI runs automatically via callbacks, decoding happens in background task
+	// Main loop processes decoded media at 30Hz
 	
-	std::vector<MediaContainer*> new_content = spid->poll();
-	// if (new_content.size() > 0)
-	// Serial.println(new_content.size());
-	for (size_t i = 0; i < new_content.size(); ++i) {
-		screen->enqueue(new_content[i]);
-	}
-	delay(5);
+	// This function doesn't need to do anything - the architecture handles everything
+	// SPI callbacks capture data -> Decoding task processes -> Main loop displays at 30Hz
 }
 
 void run_spi_debug_mode() {
-	// SPI Debug mode - display raw hex bytes received
-	static bool debug_initialized = false;
-	static unsigned long last_status_update = 0;
-	static int no_data_counter = 0;
-	
-	if (!debug_initialized) {
-		Serial.println("Initializing SPI debug mode...");
-		Serial.println("Will display received SPI bytes as hex on screen");
-		
-		// Display initial status on screen
-		auto* status_group = new TextGroup(0, DICE_BLACK, DICE_GREEN);
-		Text* status_text = new Text("SPI DEBUG MODE\nWaiting for data...", 5000, FontID::TF, 50, 200);
-		status_group->add_member(status_text);
-		screen->enqueue(status_group);
-		
-		debug_initialized = true;
-		last_status_update = millis();
-	}
-	
-	// Queue SPI transaction
-	spid->queueTransaction();
-	
-	// Poll for debug hex data
-	MediaContainer* hex_data = spid->pollDebugHex();
-	if (hex_data != nullptr) {
-		screen->enqueue(hex_data);
-		no_data_counter = 0;  // Reset counter when we get data
-	} else {
-		no_data_counter++;
-		
-		// Show periodic status updates when no data is received
-		if (millis() - last_status_update > 5000) {  // Every 5 seconds
-			auto* status_group = new TextGroup(0, DICE_BLACK, DICE_WHITE);
-			String status_msg = "SPI DEBUG MODE\nWaiting for data...\nNo data cycles: " + String(no_data_counter);
-			Text* status_text = new Text(status_msg, 2000, FontID::TF, 50, 200);
-			status_group->add_member(status_text);
-			screen->enqueue(status_group);
-			last_status_update = millis();
-		}
-	}
-	
-	// Update screen
-	screen->update();
-	
-	delay(10);  // Small delay to prevent overwhelming the display
+    // SPI Debug mode - display statistics from the decoding handler
+    static bool debug_initialized = false;
+    static unsigned long last_status_update = 0;
+    
+    if (!debug_initialized) {
+        Serial.println("Initializing SPI debug mode...");
+        Serial.println("Will display SPI and decoding statistics on screen");
+        
+        // Display initial status on screen
+        auto* status_group = new TextGroup(0, DICE_BLACK, DICE_GREEN);
+        Text* status_text = new Text("SPI DEBUG MODE\nCallback-based SPI\nWaiting for data...", 5000, FontID::TF, 50, 200);
+        status_group->add_member(status_text);
+        screen->enqueue(status_group);
+        
+        debug_initialized = true;
+        last_status_update = millis();
+    }
+    
+    // Show periodic statistics about the SPI and decoding handler
+    if (millis() - last_status_update > 3000) {  // Every 3 seconds
+        auto decode_stats = spid->get_decode_statistics();
+        auto spi_timing = spid->get_spi_timing_stats();
+        size_t transaction_count = spid->get_transaction_count();
+        
+        // Get memory statistics
+        size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        size_t free_psram = psramFound() ? heap_caps_get_free_size(MALLOC_CAP_SPIRAM) : 0;
+        
+        // auto* stats_group = new TextGroup(0, DICE_BLACK, DICE_CYAN);
+        // String stats_msg = "SPI CALLBACK STATS:\n";
+        // stats_msg += "Transactions: " + String(transaction_count) + "\n";
+        // stats_msg += "Raw chunks: " + String(decode_stats.raw_chunks_received) + "\n";
+        // stats_msg += "Decoded: " + String(decode_stats.messages_decoded) + "\n";
+        // stats_msg += "Decode fails: " + String(decode_stats.decode_failures) + "\n";
+        // stats_msg += "SOF errors: " + String(decode_stats.sof_marker_errors) + "\n";
+        // stats_msg += "Sync recovery: " + String(decode_stats.sync_recovery_attempts) + "\n";
+        // stats_msg += "Queue drops: " + String(decode_stats.raw_queue_overflows) + "\n";
+        // stats_msg += "Raw Q: " + String(decode_stats.current_raw_queue_depth) + "/" + String(16) + "\n";
+        // stats_msg += "Media Q: " + String(decode_stats.current_decoded_queue_depth) + "/" + String(8) + "\n";
+        // stats_msg += "SPI Max: " + String(spi_timing.max_poll_time_ms) + "ms\n";
+        // stats_msg += "SPI Avg: " + String(spi_timing.avg_poll_time_ms) + "ms\n";
+        
+        // // Memory information
+        // stats_msg += "Heap: " + String(free_heap / 1024) + "KB\n";
+        // if (psramFound()) {
+        //     stats_msg += "PSRAM: " + String(free_psram / 1024) + "KB";
+        // } else {
+        //     stats_msg += "PSRAM: N/A";
+        // }
+        
+        // Text* stats_text = new Text(stats_msg, 2800, FontID::TF, 10, 50);
+        // stats_group->add_member(stats_text);
+        // screen->enqueue(stats_group);
+        last_status_update = millis();
+        
+        // Minimal serial output - only summary stats every 3 seconds
+        Serial.println("[DEBUG] T:" + String(transaction_count) + 
+                       " D:" + String(decode_stats.messages_decoded) + 
+                       " F:" + String(decode_stats.decode_failures) + 
+                       " SOF:" + String(decode_stats.sof_marker_errors) +
+                       " Q:" + String(decode_stats.current_raw_queue_depth) + "/" + String(decode_stats.current_decoded_queue_depth) +
+                       " H:" + String(free_heap / 1024) + "KB" +
+                       " P:" + String(free_psram / 1024) + "KB" +
+                       " Overflows:" + String(decode_stats.raw_queue_overflows));
+    }
 }

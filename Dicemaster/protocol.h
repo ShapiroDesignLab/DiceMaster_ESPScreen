@@ -75,21 +75,6 @@ struct ImageChunk {
 
 struct ImageEnd { uint8_t imgId; };
 
-// -------------------------  Option list payloads ----------------------
-struct OptionEntry {
-    uint8_t  selected;
-    uint16_t x, y;
-    uint8_t  len;
-    char     text[255];
-};
-
-struct OptionList {
-    uint8_t entryCount;
-    OptionEntry entries[12];   // adjust size as needed
-};
-
-struct OptionSelectionUpdate { uint8_t index; };
-
 // -------------------------  Control / status --------------------------
 struct PingRequest {};  // Empty payload
 
@@ -111,8 +96,6 @@ enum PayloadTag : uint8_t {
     TAG_IMAGE_START,
     TAG_IMAGE_CHUNK,
     TAG_IMAGE_END,
-    TAG_OPTION_LIST,
-    TAG_OPTION_UPDATE,
     TAG_BACKLIGHT_ON,
     TAG_BACKLIGHT_OFF,
     TAG_PING_REQUEST,
@@ -128,8 +111,6 @@ struct Payload {
         ImageStart             imageStart;
         ImageChunk             imageChunk;
         ImageEnd               imageEnd;
-        OptionList             optionList;
-        OptionSelectionUpdate  optionUpdate;
         PingRequest            pingRequest;
         PingResponse           pingResponse;
         Ack                    ack;
@@ -141,6 +122,13 @@ struct Payload {
 struct Message {
     MessageHeader hdr;
     Payload       payload;
+};
+
+struct SlaveResponse {
+    uint8_t  marker;        // should be SOF_MARKER_REPLY
+    uint8_t msgId;          // ID of the message being replied to
+    uint32_t errorCode;     // BYTE 2-5: status code (0=OK, 1=Warning, 2=Error)
+    uint16_t padding;       // BYTE 6-7: padding (0)
 };
 
 // -----------------------------------------------------------------------
@@ -248,33 +236,6 @@ inline size_t encodeImageEnd(uint8_t* out, const ImageEnd& ie)
     return 1;
 }
 
-// Option list encoder
-inline size_t encodeOptionList(uint8_t* out, const OptionList& ol)
-{
-    out[0] = ol.entryCount;
-    size_t offset = 1;
-    
-    for(uint8_t i = 0; i < ol.entryCount; ++i) {
-        const OptionEntry& entry = ol.entries[i];
-        out[offset] = entry.selected;
-        writeBE(out + offset + 1, entry.x, 2);
-        writeBE(out + offset + 3, entry.y, 2);
-        out[offset + 5] = entry.len;
-        offset += 6;
-        
-        memcpy(out + offset, entry.text, entry.len);
-        offset += entry.len;
-    }
-    return offset;
-}
-
-// Option selection update encoder
-inline size_t encodeOptionUpdate(uint8_t* out, const OptionSelectionUpdate& osu)
-{
-    out[0] = osu.index;
-    return 1;
-}
-
 // Ping request encoder (empty payload)
 inline size_t encodePingRequest(uint8_t* out, const PingRequest& pr)
 {
@@ -333,12 +294,6 @@ inline size_t encode(uint8_t* buffer, size_t bufferSize, const Message& msg)
         case TAG_IMAGE_END:
             payloadLen = encodeImageEnd(payloadBuffer, msg.payload.u.imageEnd);
             break;
-        case TAG_OPTION_LIST:
-            payloadLen = encodeOptionList(payloadBuffer, msg.payload.u.optionList);
-            break;
-        case TAG_OPTION_UPDATE:
-            payloadLen = encodeOptionUpdate(payloadBuffer, msg.payload.u.optionUpdate);
-            break;
         case TAG_PING_REQUEST:
             payloadLen = encodePingRequest(payloadBuffer, msg.payload.u.pingRequest);
             break;
@@ -365,6 +320,38 @@ inline size_t encode(uint8_t* buffer, size_t bufferSize, const Message& msg)
     encodeHeader(buffer, msg.hdr.type, msg.hdr.id, static_cast<uint16_t>(payloadLen));
     
     return 5 + payloadLen;
+}
+
+// -----------------------------------------------------------------------
+//  REPLY ENCODING FUNCTION
+// -----------------------------------------------------------------------
+inline size_t encode_reply(uint8_t* buffer, size_t bufferSize, uint8_t msgId, uint32_t errorCode)
+{
+    if(bufferSize < 8) return 0; // Need 8 bytes for SlaveResponse
+    
+    SlaveResponse response;
+    response.marker = ::SOF_MARKER_REPLY;
+    response.msgId = msgId;
+    response.errorCode = errorCode;
+    response.padding = 0;
+    
+    // Encode the response directly into buffer
+    buffer[0] = response.marker;
+    buffer[1] = response.msgId;
+    writeBE(buffer + 2, response.errorCode, 4);  // 4-byte error code
+    writeBE(buffer + 6, response.padding, 2);    // 2-byte padding
+    
+    // Print the first 8 bytes of the buffer as hex numbers
+    Serial.print("Buffer (hex): ");
+    for(size_t i = 0; i < 8; ++i) {
+        Serial.print("0x");
+        if(buffer[i] < 0x10) Serial.print("0"); // Add leading zero for single-digit hex
+        Serial.print(buffer[i], HEX);
+        if(i < 7) Serial.print(" ");
+    }
+    Serial.println();
+    
+    return 8;
 }
 
 // -----------------------------------------------------------------------
@@ -462,44 +449,6 @@ inline ErrorCode decodeImageEnd(const uint8_t* p, size_t len, ImageEnd& ie)
     return ErrorCode::SUCCESS;
 }
 
-// Option list decoder
-inline ErrorCode decodeOptionList(const uint8_t* p, size_t len, OptionList& ol)
-{
-    if(len < 1) return ErrorCode::OPTION_LIST_TOO_SHORT;
-    
-    ol.entryCount = p[0];
-    if(ol.entryCount > 12) return ErrorCode::OPTION_LIST_TOO_MANY_ENTRIES;
-    
-    size_t offset = 1;
-    for(uint8_t i = 0; i < ol.entryCount; ++i) {
-        if(offset + 6 > len) return ErrorCode::OPTION_ENTRY_HEADER_TOO_SHORT;
-        
-        OptionEntry& entry = ol.entries[i];
-        entry.selected = p[offset];
-        entry.x = static_cast<uint16_t>(readBE(p + offset + 1, 2));
-        entry.y = static_cast<uint16_t>(readBE(p + offset + 3, 2));
-        entry.len = p[offset + 5];
-        offset += 6;
-        
-        if(offset + entry.len > len) return ErrorCode::OPTION_ENTRY_TEXT_TRUNCATED;
-        if(entry.len > 255) return ErrorCode::OPTION_ENTRY_TEXT_TRUNCATED;  // Sanity check
-        
-        memcpy(entry.text, p + offset, entry.len);
-        entry.text[entry.len] = '\0'; // null terminate
-        offset += entry.len;
-    }
-    
-    return (offset == len) ? ErrorCode::SUCCESS : ErrorCode::OPTION_LIST_LENGTH_MISMATCH;
-}
-
-// Option selection update decoder
-inline ErrorCode decodeOptionUpdate(const uint8_t* p, size_t len, OptionSelectionUpdate& osu)
-{
-    if(len < 1) return ErrorCode::OPTION_UPDATE_TOO_SHORT;
-    osu.index = p[0];
-    return ErrorCode::SUCCESS;
-}
-
 // Ping request decoder (empty payload)
 inline ErrorCode decodePingRequest(const uint8_t* p, size_t len, PingRequest& pr)
 {
@@ -579,14 +528,6 @@ inline ErrorCode decode(const uint8_t* buffer, size_t bufferSize, Message& msg)
         case MessageType::IMAGE_TRANSFER_END:
             msg.payload.tag = TAG_IMAGE_END;
             return decodeImageEnd(payload, payloadLen, msg.payload.u.imageEnd);
-            
-        case MessageType::OPTION_LIST:
-            msg.payload.tag = TAG_OPTION_LIST;
-            return decodeOptionList(payload, payloadLen, msg.payload.u.optionList);
-            
-        case MessageType::OPTION_SELECTION_UPDATE:
-            msg.payload.tag = TAG_OPTION_UPDATE;
-            return decodeOptionUpdate(payload, payloadLen, msg.payload.u.optionUpdate);
             
         case MessageType::BACKLIGHT_ON:
             msg.payload.tag = TAG_BACKLIGHT_ON;

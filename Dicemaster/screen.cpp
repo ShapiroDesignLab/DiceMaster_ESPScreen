@@ -14,10 +14,15 @@ bool Screen::is_next_ready() {
     if (display_queue.empty()) {
         return false;
     }
-    while (!display_queue.empty() && display_queue.front()->get_status() > MediaStatus::READY) {
+    while ((!display_queue.empty()) && display_queue.front()->get_status() > MediaStatus::READY) {
         MediaContainer* m = display_queue.front();
         display_queue.pop_front();
-        delay(10); // Give any running tasks a moment to complete
+        
+        // Debug: Log when images are being deleted due to expiration
+        if (m->get_media_type() == MediaType::IMAGE) {
+            Serial.println("[SCREEN] Deleting expired Image ID " + String(m->get_image_id()) + 
+                           " - Status: " + String((int)m->get_status()));
+        }
         delete m;
     }
     if (display_queue.empty()) {
@@ -25,11 +30,6 @@ bool Screen::is_next_ready() {
     }
     return (display_queue.front()->get_status() == MediaStatus::READY);
 }
-
-bool Screen::is_option_media(MediaContainer* med) {
-    return (med->get_media_type() == MediaType::OPTION);
-}
-
 
 // Draw image
 void Screen::draw_img(MediaContainer* med) {
@@ -333,17 +333,15 @@ void Screen::enqueue(MediaContainer* med) {
     if (med->get_media_type() == MediaType::IMAGE || med->get_media_type() == MediaType::TEXTGROUP
         || med->get_media_type() == MediaType::TEXT) {
         display_queue.push_back(med);
+        
+        // Debug: Log when images are enqueued with their status and duration
+        if (med->get_media_type() == MediaType::IMAGE) {
+            Serial.println("[SCREEN] Enqueued Image ID " + String(med->get_image_id()) + 
+                           " - Status: " + String((int)med->get_status()) + 
+                           ", Queue size: " + String(display_queue.size()));
+        }
         return;
     }
-
-    // If add options
-    if (med->get_media_type() == MediaType::OPTION) {
-        display_queue.push_front(med);
-        if (!display_queue.empty()) return;
-        display_queue.push_front(med);
-        return;
-    }
-
     return;
 }
 
@@ -351,11 +349,9 @@ void Screen::update() {
     // If next is emergency like option, we dump enforced time rule
     // If next is ready and current image expires, we move on;
     if (!is_next_ready()) {   // If there is nothing to show, just return
-        // Serial.println("Nothing ready yet!");
         return;
     }
     if (current_disp == nullptr || current_disp->get_status() >= MediaStatus::EXPIRED) {
-        // Serial.println("Displaying next!");
         display_next();
         return;
     }

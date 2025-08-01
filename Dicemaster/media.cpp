@@ -1,5 +1,6 @@
 #include "media.h"
 #include "esp_task_wdt.h"
+#include "esp_heap_caps.h"
 
 namespace dice {
 
@@ -214,49 +215,50 @@ int Image::JPEGDraw240(JPEGDRAW* pDraw) {
 void Image::decode() {
     // Check if we still have valid content
     if (content == nullptr || decoded_content == nullptr) {
-        Serial.println("[ERROR] Invalid buffers during decode");
+        Serial.println("[IMAGE] ERROR: Invalid buffers for ID " + String(image_id));
         set_status(MediaStatus::EXPIRED);
         return;
+    }
+    
+    unsigned long decode_start = millis();
+    
+    // Check memory for larger images only
+    if (total_size > 50000 && psramFound()) {
+        size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        if (free_psram < 65536) { // Less than 64KB free
+            Serial.println("[IMAGE] WARNING: Low PSRAM (" + String(free_psram/1024) + "KB) for ID " + String(image_id));
+        }
     }
     
     // Feed watchdog before starting intensive operation
     esp_task_wdt_reset();
     
-    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);   // Adjust as necessary
-    // Set the drawing function
-    int (*JPEGDraw) (JPEGDRAW*);
-    if (resolution == ImageResolution::SQ240) {
-      // Serial.println("Decoding 240x240");
-      JPEGDraw = JPEGDraw240; 
-    }
-    else{
-      JPEGDraw = JPEGDraw480; 
-      // Serial.println("Decoding 480x480");
-    }
+    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
+    
+    // Set the drawing function based on resolution
+    int (*JPEGDraw) (JPEGDRAW*) = (resolution == ImageResolution::SQ240) ? JPEGDraw240 : JPEGDraw480;
+    
     // Decode
     if (jpeg.openRAM(content, total_size, JPEGDraw)) {
         jpeg.setUserPointer(this);
-        
-        // Feed watchdog during decode
         esp_task_wdt_reset();
         
         if (jpeg.decode(0, 0, 0)) {
-            // JPEG decode completed successfully
+            set_status(MediaStatus::READY);
         } else {
-            Serial.println("[ERROR] JPEG decode failed");
+            Serial.println("[IMAGE] ERROR: JPEG decode failed for ID " + String(image_id));
+            set_status(MediaStatus::EXPIRED);
         }
         jpeg.close();
-        
-        // Feed watchdog after decode
         esp_task_wdt_reset();
         
-        // free(content);   // Free original content as it's no longer needed
-        // content = nullptr;
-        set_status(MediaStatus::READY);
     } else {
-        Serial.println("[Warning] Bad image file for ID " + String(image_id));
-        set_status(MediaStatus::EXPIRED);   // Handle error appropriately
+        Serial.println("[IMAGE] ERROR: Failed to open JPEG for ID " + String(image_id) + 
+                       " (size: " + String(total_size) + ")");
+        set_status(MediaStatus::EXPIRED);
     }
+    
+    set_status(MediaStatus::READY);
 }
 
 void Image::startDecode() {
@@ -275,20 +277,54 @@ Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t t
     , content(nullptr)
     , input_ptr(nullptr)
     , decoded_content(nullptr)
-    , decodeTaskHandle(nullptr) {
+    , decodeTaskHandle(nullptr)
+    , chunks_received(0) {
+    
+    Serial.println("[IMAGE] Constructor: img_id " + String(img_id));
+    
+    // Check PSRAM availability for larger images
+    if (total_img_size > 50000 && psramFound()) {
+        size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        size_t total_needed = total_img_size + (SCREEN_PXLCNT * sizeof(uint16_t));
+        
+        if (free_psram < total_needed + 32768) { // Keep 32KB buffer
+            Serial.println("[IMAGE] WARNING: Low PSRAM for ID " + String(img_id) + 
+                           " - Available: " + String(free_psram/1024) + "KB, Need: " + 
+                           String(total_needed/1024) + "KB");
+        }
+    }
     
     // Allocate content buffer in PSRAM
-    content = (uint8_t*) ps_malloc(total_img_size);
+    if (psramFound()) {
+        content = (uint8_t*) ps_malloc(total_img_size);
+    } else {
+        content = (uint8_t*) malloc(total_img_size);
+    }
+    
     if (content == nullptr) {
-        Serial.println("[ERROR] Failed to allocate content buffer in PSRAM");
+        Serial.println("[IMAGE] ERROR: Failed to allocate content buffer (" + String(total_img_size) + " bytes)");
+        if (psramFound()) {
+            Serial.println("[IMAGE] PSRAM free: " + String(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+        }
+        Serial.println("[IMAGE] Regular heap free: " + String(heap_caps_get_free_size(MALLOC_CAP_8BIT)));
         set_status(MediaStatus::EXPIRED);
         return;
     }
     
     // Allocate decoded content buffer in PSRAM
-    decoded_content = (uint16_t*) ps_malloc(SCREEN_PXLCNT * sizeof(uint16_t));
+    size_t decoded_size = SCREEN_PXLCNT * sizeof(uint16_t);
+    if (psramFound()) {
+        decoded_content = (uint16_t*) ps_malloc(decoded_size);
+    } else {
+        decoded_content = (uint16_t*) malloc(decoded_size);
+    }
+    
     if (decoded_content == nullptr) {
-        Serial.println("[ERROR] Failed to allocate decoded buffer in PSRAM");
+        Serial.println("[IMAGE] ERROR: Failed to allocate decoded buffer (" + String(decoded_size) + " bytes)");
+        if (psramFound()) {
+            Serial.println("[IMAGE] PSRAM free: " + String(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+        }
+        Serial.println("[IMAGE] Regular heap free: " + String(heap_caps_get_free_size(MALLOC_CAP_8BIT)));
         free(content);
         content = nullptr;
         set_status(MediaStatus::EXPIRED);
@@ -296,7 +332,7 @@ Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t t
     }
     
     // Clear the decoded buffer
-    memset(decoded_content, 0, SCREEN_PXLCNT * sizeof(uint16_t));
+    memset(decoded_content, 0, decoded_size);
     
     input_ptr = content;
 }
@@ -329,94 +365,55 @@ uint16_t* Image::get_img() {
 }
 
 void Image::add_chunk(const uint8_t* chunk, size_t chunk_size) {
-    if (input_ptr + chunk_size > content + total_size) {
+    if (!content || !input_ptr) {
+        Serial.println("[IMAGE] ERROR: Cannot add chunk - buffers not allocated for ID " + String(image_id));
         return;
     }
+    
+    if (input_ptr + chunk_size > content + total_size) {
+        Serial.println("[IMAGE] ERROR: Chunk overflow for ID " + String(image_id) + 
+                       " - Current: " + String(received_len()) + 
+                       ", Adding: " + String(chunk_size) + 
+                       ", Total: " + String(total_size));
+        set_status(MediaStatus::EXPIRED);
+        return;
+    }
+    
+    // Copy chunk data
     memcpy(input_ptr, chunk, chunk_size);
     input_ptr += chunk_size;
+    chunks_received++;
+    
+    size_t received = received_len();
+    
+    // Debug: Track chunk reception for each image
+    Serial.println("[CHUNK] Image " + String(image_id) + ": chunk " + String(chunks_received) + 
+                   " (" + String(chunk_size) + " bytes) - Total: " + String(received) + 
+                   "/" + String(total_size) + " (" + String((received * 100) / total_size) + "%)");
 
-    if (received_len() == total_size) {
+    if (received == total_size) {
+        Serial.println("[IMAGE] Image " + String(image_id) + " complete: " + String(chunks_received) + 
+                       " chunks, " + String(total_size) + " bytes total");
+        
         if (image_format == ImageFormat::JPEG) {
-            // Serial.println("Started decoding");
             startDecode();
         } else if (image_format == ImageFormat::RGB565) {
             // For RGB565 bitmap, no decoding needed
-            memcpy(decoded_content, content, total_size);
+            size_t copy_size = min(total_size, SCREEN_PXLCNT * sizeof(uint16_t));
+            memcpy(decoded_content, content, copy_size);
+            set_status(MediaStatus::READY);
+        } else {
+            Serial.println("[IMAGE] ERROR: Unsupported format " + 
+                           String(static_cast<uint8_t>(image_format)) + " for ID " + String(image_id));
+            set_status(MediaStatus::EXPIRED);
         }
-        // free(content);
-        // content = nullptr;
     }
-}
-
-uint8_t Image::get_image_id() const {
-    return image_id;
-}
-
-ImageFormat Image::get_image_format() const {
-    return image_format;
-}
-
-ImageResolution Image::get_image_resolution() const {
-    return resolution;
-}
-
-Rotation Image::get_rotation() const {
-    return rotation;
-}
-
-void Image::set_rotation(Rotation rot) {
-    rotation = rot;
 }
 
 void Image::add_decoded(const uint16_t* img) {
   memcpy(decoded_content, img, SCREEN_PXLCNT * sizeof(uint16_t));
   set_status(MediaStatus::READY);
 }
-
-// OptionGroup::OptionGroup(uint8_t selected_idx)
-//     : MediaContainer(MediaType::OPTION, 0)
-//     , selected_index(selected_idx) {
-//     set_status(MediaStatus::READY);
-// }
-
-// void OptionGroup::add_option(String option_text) {
-//     options.push_back(option_text);
-// }
-
-// size_t OptionGroup::size() const {
-//     return options.size();
-// }
-
-// std::vector<String> OptionGroup::get_option_text(uint8_t select_id) const {
-//     if (options.size() <= 1) {
-//         return options;
-//     }
-//     if (select_id == 0) {
-//         return std::vector<String>(String(), options[0], options[1]);
-//     }
-//     if (select_id == options.size()-1) {
-//         return std::vector<String>(options[select_id-1], options[select_id], String());
-//     }
-//     return std::vector<String>(options[select_id-1], options[select_id], options[select_id+1]);
-// }
-
-// uint8_t OptionGroup::get_selected_index() const {
-//     return selected_index;
-// }
-
-// void OptionGroup::set_selected_index(uint8_t idx) {
-//     if (idx < options.size()) {
-//         selected_index = idx;
-//     }
-// }
-
-// void OptionUpdate::OptionUpdate(const uint8_t new_id) 
-//     : selecting_id(new_id)
-//     {}
-
-// virtual uint8_t OptionUpdate::get_selected_index() const {
-//     return selecting_id;
-// }
 
 
 MediaContainer* print_error(String input) {

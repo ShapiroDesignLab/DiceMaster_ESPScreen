@@ -26,8 +26,7 @@ private:
     Rotation current_gfx_rotation = Rotation::ROT_0;
 
     bool is_next_ready();
-    bool is_option_media(MediaContainer* med);
-
+    
     // Draw image
     void draw_img(MediaContainer* med);
     void draw_bmp565(uint16_t* img);
