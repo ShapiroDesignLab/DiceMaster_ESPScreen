@@ -6,7 +6,7 @@
 #include "spi.h"
 #include "media.h"
 #include "protocol.h"
-#include "jpg.hs/umlogo_sq240.h"
+#include "jpg.hs/logo.h"
 
 namespace dice {
 
@@ -488,8 +488,8 @@ private:
         delay(2500);
         
         // Example 2: Show actual image from memory
-        Image* img = new Image(128, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 2000, 1, Rotation::ROT_0);
-        img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
+        Image* img = new Image(128, ImageFormat::JPEG, ImageResolution::SQ480, logo_SIZE, 2000, 1, Rotation::ROT_0);
+        img->add_chunk(logo, logo_SIZE);
         screen->enqueue(img);
         screen->update();
         Serial.println("[DISPLAY] Actual image displayed");

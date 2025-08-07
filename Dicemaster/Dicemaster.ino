@@ -2,7 +2,6 @@
 #include "spi.h"
 #include "examples.h"  // New comprehensive examples
 #include "tests.h"     // New test suite
-#include "jpg.hs/umlogo_sq240.h"
 #include "esp_heap_caps.h"
 using namespace dice;
 
@@ -13,8 +12,37 @@ TestSuite* test_suite;
 // System mode configuration
 // Available modes: TESTING, DEMO, PRODUCTION, SPI_DEBUG
 // Change to SystemMode::PRODUCTION for normal operation
-SystemMode current_mode = SystemMode::SPI_DEBUG;  // Set current operating mode
+SystemMode current_mode = SystemMode::PRODUCTION;  // Set current operating mode
 int revolving_counter = 0;  // Counter for revolving animation demo
+int messages_received_counter = 0;  // Counter for messages received/displayed
+
+// Helper function for production mode loading dots animation
+void show_loading_dots() {
+	static unsigned long last_dots_update = 0;
+	static int dots_count = 1;
+	
+	if (millis() - last_dots_update >= 333) { // 5Hz = 200ms interval
+		String dots_text = "";
+		for (int i = 0; i < dots_count; i++) {
+			dots_text += ".";
+		}
+		
+		// Create and display loading dots
+		auto* loading_group = new TextGroup(0, DICE_BLACK, DICE_WHITE);
+		Text* loading_text = new Text("" + dots_text, 0, FontID::TF, 50, 120);
+		loading_group->add_member(loading_text);
+		screen->enqueue(loading_group);
+		Serial.println("[LOADING] Displaying loading dots: " + dots_text);
+		
+		// Cycle dots count: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> back to 1
+		dots_count++;
+		if (dots_count > 6) {
+			dots_count = 1;
+		}
+		
+		last_dots_update = millis();
+	}
+}
 
 void setup(void){	
 	// Init serial
@@ -35,25 +63,12 @@ void setup(void){
 		while(1) delay(1000); // Halt on failure
 	}
 	
-	// Show startup logo during initialization
-	Serial.println("Displaying startup logo...");
-	MediaContainer* startup_logo = get_demo_startup_logo();
-	if (startup_logo) {
-		// Wait for logo decode
-		while (startup_logo->get_status() != MediaStatus::READY && 
-			startup_logo->get_status() != MediaStatus::EXPIRED) {
-		delay(10);
-		}
-		screen->enqueue(startup_logo);
-		screen->update();
-	}
-	
 	Serial.println("=== DiceMaster System Ready ===");
 	Serial.println("Current mode: " + String(current_mode == SystemMode::DEMO ? "DEMO" : 
 	                                         current_mode == SystemMode::TESTING ? "TESTING" : 
 	                                         current_mode == SystemMode::SPI_DEBUG ? "SPI_DEBUG" : "PRODUCTION"));
 	Serial.println("System initialized successfully.");
-	delay(1000); // Show logo for 2 seconds
+	delay(2000); // Show logo for 2 seconds
 }
 
 void loop() {
@@ -116,6 +131,9 @@ void loop() {
 			if (new_content.size() > 0) {
 				Serial.println("[MAIN] Retrieved " + String(new_content.size()) + " media items");
 				
+				// Increment messages received counter
+				messages_received_counter += new_content.size();
+				
 				// Debug: Log each retrieved image
 				for (size_t i = 0; i < new_content.size(); ++i) {
 					if (new_content[i]->get_media_type() == MediaType::IMAGE) {
@@ -177,7 +195,12 @@ void run_production_mode() {
 	// SPI runs automatically via callbacks, decoding happens in background task
 	// Main loop processes decoded media at 30Hz
 	
-	// This function doesn't need to do anything - the architecture handles everything
+	// Show loading dots animation if no messages have been received yet
+	if (messages_received_counter == 0) {
+		show_loading_dots();
+	}
+	
+	// This function doesn't need to do anything else - the architecture handles everything
 	// SPI callbacks capture data -> Decoding task processes -> Main loop displays at 30Hz
 }
 
@@ -209,32 +232,6 @@ void run_spi_debug_mode() {
         // Get memory statistics
         size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
         size_t free_psram = psramFound() ? heap_caps_get_free_size(MALLOC_CAP_SPIRAM) : 0;
-        
-        // auto* stats_group = new TextGroup(0, DICE_BLACK, DICE_CYAN);
-        // String stats_msg = "SPI CALLBACK STATS:\n";
-        // stats_msg += "Transactions: " + String(transaction_count) + "\n";
-        // stats_msg += "Raw chunks: " + String(decode_stats.raw_chunks_received) + "\n";
-        // stats_msg += "Decoded: " + String(decode_stats.messages_decoded) + "\n";
-        // stats_msg += "Decode fails: " + String(decode_stats.decode_failures) + "\n";
-        // stats_msg += "SOF errors: " + String(decode_stats.sof_marker_errors) + "\n";
-        // stats_msg += "Sync recovery: " + String(decode_stats.sync_recovery_attempts) + "\n";
-        // stats_msg += "Queue drops: " + String(decode_stats.raw_queue_overflows) + "\n";
-        // stats_msg += "Raw Q: " + String(decode_stats.current_raw_queue_depth) + "/" + String(16) + "\n";
-        // stats_msg += "Media Q: " + String(decode_stats.current_decoded_queue_depth) + "/" + String(8) + "\n";
-        // stats_msg += "SPI Max: " + String(spi_timing.max_poll_time_ms) + "ms\n";
-        // stats_msg += "SPI Avg: " + String(spi_timing.avg_poll_time_ms) + "ms\n";
-        
-        // // Memory information
-        // stats_msg += "Heap: " + String(free_heap / 1024) + "KB\n";
-        // if (psramFound()) {
-        //     stats_msg += "PSRAM: " + String(free_psram / 1024) + "KB";
-        // } else {
-        //     stats_msg += "PSRAM: N/A";
-        // }
-        
-        // Text* stats_text = new Text(stats_msg, 2800, FontID::TF, 10, 50);
-        // stats_group->add_member(stats_text);
-        // screen->enqueue(stats_group);
         last_status_update = millis();
         
         // Minimal serial output - only summary stats every 3 seconds

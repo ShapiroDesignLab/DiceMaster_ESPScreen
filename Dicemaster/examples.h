@@ -4,7 +4,7 @@
 #include "media.h"
 #include "protocol.h"
 #include "screen.h"  // Include the actual Screen class definition
-#include "jpg.hs/umlogo_sq240.h"
+#include "jpg.hs/logo.h"
 #include "constants.h"
 
 #include "jpg.hs/revolving_umlogo_12/rev_00.h"
@@ -126,8 +126,8 @@ MediaContainer* get_demo_textgroup_rotated(Rotation rot) {
 MediaContainer* get_demo_image_rotated(Rotation rot) {
     try {
         Image* img = new Image(100 + static_cast<uint8_t>(rot), ImageFormat::JPEG, 
-                              ImageResolution::SQ240, umlogo_sq240_SIZE, 1500, 1, rot); // 1 chunk, Shorter duration for tests
-        img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
+                              ImageResolution::SQ480, logo_SIZE, 1500, 1, rot); // 1 chunk, Shorter duration for tests
+        img->add_chunk(logo, logo_SIZE);
         return img;
     } catch (...) {
         return print_error("Failed to create rotated image");
@@ -159,8 +159,8 @@ MediaContainer* get_demo_revolving_frame(uint8_t frame_index) {
  */
 MediaContainer* get_demo_startup_logo() {
     try {
-        Image* img = new Image(255, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 2000, 1, Rotation::ROT_0);
-        img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
+        Image* img = new Image(255, ImageFormat::JPEG, ImageResolution::SQ480, logo_SIZE, 2000, 1, Rotation::ROT_0);
+        img->add_chunk(logo, logo_SIZE);
         return img;
     } catch (...) {
         return print_error("Failed to create startup logo");
@@ -452,8 +452,8 @@ MediaContainer* demo_revolving_animation(int& frame_counter) {
 MediaContainer* get_demo_rotated_logo(Rotation rotation) {
     try {
         Image* img = new Image(100 + static_cast<uint8_t>(rotation), ImageFormat::JPEG, 
-                              ImageResolution::SQ240, umlogo_sq240_SIZE, 1000, 1, rotation);
-        img->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
+                              ImageResolution::SQ480, logo_SIZE, 1000, 1, rotation);
+        img->add_chunk(logo, logo_SIZE);
         return img;
     } catch (...) {
         return print_error("Failed to create rotated logo");

@@ -1,5 +1,5 @@
 #include "screen.h"
-#include "jpg.hs/umlogo_sq240.h"
+#include "jpg.hs/logo.h"
 #include "jpg.hs/revolving_umlogo.h"
 
 namespace dice {
@@ -319,7 +319,7 @@ Screen::Screen()
     expander->pinMode(PCA_TFT_BACKLIGHT, OUTPUT);
     expander->digitalWrite(PCA_TFT_BACKLIGHT, HIGH);
 
-    // draw_startup_logo();
+    draw_startup_logo();
 
     Serial.println("Screen Initialized!");
 }
@@ -381,11 +381,11 @@ int Screen::num_queued() {
 
 void Screen::draw_startup_logo() {
     try {
-      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, umlogo_sq240_SIZE, 500, 1, Rotation::ROT_0);
+      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ480, logo_SIZE, 500, 1, Rotation::ROT_0);
       int input_time = millis();
-      med->add_chunk(umlogo_sq240, umlogo_sq240_SIZE);
+      med->add_chunk(logo, logo_SIZE);
       while (med->get_status() != MediaStatus::READY) {
-        delay(1);
+        delay(5);
       }
       enqueue(med);
     }
