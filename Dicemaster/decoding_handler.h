@@ -83,7 +83,7 @@ private:
     std::map<uint8_t, uint8_t> expected_chunks; // Track expected number of chunks per image
     std::map<uint8_t, uint8_t> received_chunks; // Track received chunks per image
     std::map<uint8_t, unsigned long> transfer_start_time; // Track when transfer started
-    bool task_running;
+    volatile bool task_running;  // Made volatile to prevent race conditions between threads
     bool initialized;  // Track if queues/mutex are created
     
     // Queue sizes
@@ -223,9 +223,10 @@ inline bool DecodingHandler::start_task() {
     
     if (result != pdPASS) {
         Serial.println("[DECODE] Failed to create decoding task, result=" + String(result));
+        task_running = false;  // Ensure flag is reset on failure
         return false;
     }
-    
+
     task_running = true;
     Serial.println("[DECODE] Task created successfully, handle=" + String((unsigned long)decoding_task_handle, HEX));
     
@@ -386,6 +387,13 @@ inline void DecodingHandler::decoding_task_function(void* parameter) {
     DecodingHandler* handler = static_cast<DecodingHandler*>(parameter);
     if (!handler) {
         Serial.println("[DECODE] ERROR: Null handler parameter in task function!");
+        vTaskDelete(nullptr);
+        return;
+    }
+    
+    // Add safety check to ensure task_running is true before starting
+    if (!handler->task_running) {
+        Serial.println("[DECODE] ERROR: task_running is false when task starts! This indicates a race condition.");
         vTaskDelete(nullptr);
         return;
     }
