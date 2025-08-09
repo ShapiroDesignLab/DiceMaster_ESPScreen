@@ -44,6 +44,28 @@ static constexpr int  GET_RESULT_TIMEOUT_MS     = 10;   // short timeout to allo
 // Forward decl of worker task
 static void spi_slave_task(void *arg);
 
+// SPI Buffer structure for managed buffer lifecycle
+struct SPISlaveBuffer {
+    uint32_t id;              // Buffer ID (0 to N-1)
+    uint8_t* tx_buffer;       // TX buffer pointer (nullptr for RX-only)
+    uint8_t* rx_buffer;       // RX buffer pointer (nullptr for TX-only)
+    size_t tx_capacity;       // TX buffer capacity
+    size_t rx_capacity;       // RX buffer capacity  
+    size_t tx_size;           // Actual TX data size
+    size_t rx_size;           // Actual RX data received
+    uint32_t timestamp;       // Timestamp when transaction completed
+    bool in_flight;           // Whether buffer is currently in SPI hardware queue
+    
+    SPISlaveBuffer() : id(0), tx_buffer(nullptr), rx_buffer(nullptr), 
+                      tx_capacity(0), rx_capacity(0), tx_size(0), rx_size(0),
+                      timestamp(0), in_flight(false) {}
+    
+    SPISlaveBuffer(uint32_t buf_id, uint8_t* tx_buf, size_t tx_cap, uint8_t* rx_buf, size_t rx_cap)
+        : id(buf_id), tx_buffer(tx_buf), rx_buffer(rx_buf), 
+          tx_capacity(tx_cap), rx_capacity(rx_cap), tx_size(0), rx_size(0),
+          timestamp(0), in_flight(false) {}
+};
+
 struct spi_slave_context_t {
     spi_slave_interface_config_t if_cfg {
         .spics_io_num  = SS,
@@ -80,13 +102,13 @@ struct spi_slave_context_t {
     TaskHandle_t main_task_handle {NULL};
 };
 
-// Result envelope delivered to user
+// Result envelope delivered to user - contains completed buffer
 struct trans_result_t {
-    uint8_t*      rx_ptr;   // nullptr for TX‑only
-    const uint8_t* tx_ptr;  // nullptr for RX‑only
-    size_t        bytes;    // received/sent bytes (multiple of 4)
-    void*         user;     // user tag echoed back
-    esp_err_t     err;
+    SPISlaveBuffer* buffer;   // Completed buffer object
+    esp_err_t       err;      // Transaction error code
+    
+    trans_result_t() : buffer(nullptr), err(ESP_OK) {}
+    trans_result_t(SPISlaveBuffer* buf, esp_err_t error) : buffer(buf), err(error) {}
 };
 
 class Slave {
@@ -173,14 +195,15 @@ public:
     }
 
     // ===== Unified streaming API =====
-    // Queue transaction (pass nullptr for tx_buf for RX-only, nullptr for rx_buf for TX-only)
-    bool queue(const uint8_t* tx_buf, uint8_t* rx_buf, size_t size, void* user=nullptr, uint32_t timeout_ms=0) {
-        return submit_now(tx_buf, rx_buf, size, user, timeout_ms);
+    // Queue buffer transaction - buffer object contains all necessary information
+    bool queue(SPISlaveBuffer* buffer, uint32_t timeout_ms=0) {
+        if (!buffer) return false;
+        return submit_now(buffer, timeout_ms);
     }
     
     // ===== Explicit re‑queue API =====
-    bool requeue(const uint8_t* tx_buf, uint8_t* rx_buf, size_t size, void* user=nullptr, uint32_t timeout_ms=0) {
-        return queue(tx_buf, rx_buf, size, user, timeout_ms);
+    bool requeue(SPISlaveBuffer* buffer, uint32_t timeout_ms=0) {
+        return queue(buffer, timeout_ms);
     }
 
     // ===== Event‑driven readout =====
@@ -264,19 +287,29 @@ private:
         return true;
     }
 
-    // Submit one descriptor now (thread‑safe with enhanced security). User buffers must remain valid until completion.
-    bool submit_now(const uint8_t* tx_buf, uint8_t* rx_buf, size_t size, void* user, uint32_t timeout_ms) {
-        // Enhanced input validation
-        if (size == 0 || size % 4 != 0) { 
-            ESP_LOGW(TAG, "submit_now(): size must be > 0 and multiple of 4, got %zu", size); 
-            return false; 
-        }
-        if (size > ctx.bus_cfg.max_transfer_sz) {
-            ESP_LOGW(TAG, "submit_now(): size %zu exceeds max transfer size %d", size, ctx.bus_cfg.max_transfer_sz);
+    // Submit buffer now (thread‑safe with enhanced security). Buffer must remain valid until completion.
+    bool submit_now(SPISlaveBuffer* buffer, uint32_t timeout_ms) {
+        if (!buffer) {
+            ESP_LOGW(TAG, "submit_now(): buffer is nullptr");
             return false;
         }
-        if (!tx_buf && !rx_buf) {
-            ESP_LOGW(TAG, "submit_now(): both tx_buf and rx_buf are nullptr");
+        
+        // Determine transaction size based on available buffers
+        size_t tx_size = (buffer->tx_buffer && buffer->tx_size > 0) ? buffer->tx_size : 0;
+        size_t rx_size = buffer->rx_capacity; // Always use full RX capacity for receiving
+        size_t transaction_size = max(tx_size, rx_size);
+        
+        // Enhanced input validation
+        if (transaction_size == 0 || transaction_size % 4 != 0) { 
+            ESP_LOGW(TAG, "submit_now(): transaction size must be > 0 and multiple of 4, got %zu", transaction_size); 
+            return false; 
+        }
+        if (transaction_size > ctx.bus_cfg.max_transfer_sz) {
+            ESP_LOGW(TAG, "submit_now(): transaction size %zu exceeds max transfer size %d", transaction_size, ctx.bus_cfg.max_transfer_sz);
+            return false;
+        }
+        if (!buffer->tx_buffer && !buffer->rx_buffer) {
+            ESP_LOGW(TAG, "submit_now(): both tx_buffer and rx_buffer are nullptr");
             return false;
         }
         
@@ -300,11 +333,14 @@ private:
         
         // Initialize all fields to prevent information leakage
         memset(t, 0, sizeof(spi_slave_transaction_t));
-        t->length    = 8 * size;  // Convert bytes to bits
-        t->trans_len = 0;         // Will be set by hardware
-        t->tx_buffer = tx_buf;
-        t->rx_buffer = rx_buf;
-        t->user      = user;
+        t->length    = 8 * transaction_size;  // Convert bytes to bits
+        t->trans_len = 0;                     // Will be set by hardware
+        t->tx_buffer = buffer->tx_buffer;
+        t->rx_buffer = buffer->rx_buffer;
+        t->user      = buffer;                // Store buffer object pointer
+        
+        // Mark buffer as in-flight
+        buffer->in_flight = true;
         
         TickType_t to = (timeout_ms == 0) ? pdMS_TO_TICKS(5000) : pdMS_TO_TICKS(timeout_ms); // Cap at 5s max
         esp_err_t qe = spi_slave_queue_trans(this->ctx.host, t, to);
@@ -321,6 +357,7 @@ private:
         } else {
             ESP_LOGW(TAG, "submit_now(): spi_slave_queue_trans failed with error 0x%x", qe);
             xQueueSend(q_error_, &qe, 0);
+            buffer->in_flight = false; // Reset flag on failure
             delete t; // Clean up on failure
             return false;
         }
@@ -348,8 +385,23 @@ static void spi_slave_task(void *arg)
         esp_err_t ge = spi_slave_get_trans_result(self->ctx.host, &r, pdMS_TO_TICKS(GET_RESULT_TIMEOUT_MS));
         if (ge == ESP_OK && r) {
             size_t inflight; xQueuePeek(self->q_inflight_, &inflight, 0); inflight = (inflight>0?inflight-1:0); xQueueOverwrite(self->q_inflight_, &inflight);
-            trans_result_t tr{ (uint8_t*)r->rx_buffer, (const uint8_t*)r->tx_buffer, r->trans_len/8, r->user, ESP_OK };
-            xQueueSend(self->q_result_, &tr, 0);
+            
+            // Extract buffer from user pointer and update it with results
+            SPISlaveBuffer* buffer = static_cast<SPISlaveBuffer*>(r->user);
+            if (buffer) {
+                buffer->rx_size = r->trans_len / 8;  // Convert bits back to bytes
+                buffer->timestamp = millis();
+                buffer->in_flight = false;
+                
+                // Create result with buffer object
+                trans_result_t tr(buffer, ESP_OK);
+                xQueueSend(self->q_result_, &tr, 0);
+            } else {
+                // Handle case where buffer is null
+                trans_result_t tr(nullptr, ESP_ERR_INVALID_ARG);
+                xQueueSend(self->q_result_, &tr, 0);
+            }
+            
             if (self->notify_task_) xTaskNotifyGiveIndexed(self->notify_task_, self->notify_index_);
             delete r; // free descriptor; user owns buffers
         } else if (ge != ESP_ERR_TIMEOUT && ge != ESP_OK) {

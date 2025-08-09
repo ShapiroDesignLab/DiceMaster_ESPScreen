@@ -58,9 +58,6 @@ private:
 public:
     Screen();
     ~Screen();
-    
-    // Initialize screen queues (called after constructor)
-    bool initialize_queues();
 
     bool enqueue(MediaContainer* med);
 

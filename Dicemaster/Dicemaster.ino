@@ -27,22 +27,15 @@ void show_loading_dots() {
 			dots_text += ".";
 		}
 		
-		// Create and display loading dots with detailed logging
-		Serial.println("[LOADING] Creating TextGroup and Text objects...");
+		// Create and display loading dots
 		auto* loading_group = new TextGroup(0, DICE_BLACK, DICE_WHITE);
 		Text* loading_text = new Text("" + dots_text, 0, FontID::TF, 50, 120);
-		Serial.println("[LOADING] Created Text: '" + dots_text + "' at position (50, 120)");
 		
 		loading_group->add_member(loading_text);
-		Serial.printf("[LOADING] TextGroup created with %d members, status: %d\n", 
-		              (int)loading_group->size(), (int)loading_group->get_status());
 		
 		bool enqueue_success = screen->enqueue(loading_group);
-		Serial.printf("[LOADING] Enqueue result: %s for dots: %s\n", 
-		              enqueue_success ? "SUCCESS" : "FAILED", dots_text.c_str());
 		
 		if (!enqueue_success) {
-			Serial.println("[LOADING] ERROR: Failed to enqueue loading dots - deleting objects");
 			delete loading_group; // This will also delete the text member
 		}
 		
@@ -65,25 +58,16 @@ void setup(void){
 	if (psramInit()) Serial.println("\nPSRAM correctly initialized");
 	else Serial.println("PSRAM not available");
 
-	spid = new SPIDriver();
-	screen = new Screen();
+	screen = new Screen();  // Initialize screen with queues in constructor
+	spid = new SPIDriver(screen);  // Initialize SPI with screen reference in constructor
 	test_suite = new TestSuite(screen, spid);  // Initialize test suite
 	
-	// Initialize screen thread-safe queues
-	if (!screen->initialize_queues()) {
-		Serial.println("Failed to initialize screen queues!");
-		while(1) delay(1000); // Halt on failure
-	}
+	// Give the system a moment to settle after initialization
+	delay(100);
 	
-	// Now that queues are initialized, display the startup logo
+	// Now that both screen and SPI are fully initialized, display the startup logo
 	screen->draw_startup_logo();
 	screen->update(); // Display the logo immediately
-	
-	// Initialize SPI with callback-based processing
-	if (!spid->initialize(screen)) {
-		Serial.println("Failed to initialize SPI driver!");
-		while(1) delay(1000); // Halt on failure
-	}
 	
 	Serial.println("=== DiceMaster System Ready ===");
 	Serial.println("Current mode: " + String(current_mode == SystemMode::DEMO ? "DEMO" : 
@@ -95,16 +79,9 @@ void setup(void){
 
 void loop() {
 	static unsigned long last_media_update = 0;
-	static unsigned long last_loop_debug = 0;
 	const unsigned long MEDIA_UPDATE_INTERVAL = 16; // 60Hz (~16ms) - faster screen updates
 	
 	unsigned long now = millis();
-	
-	// Debug: Show that main loop is running
-	if (now - last_loop_debug > 5000) { // Every 5 seconds
-		Serial.println("[MAIN] Main loop running, last media update: " + String(now - last_media_update) + "ms ago");
-		last_loop_debug = now;
-	}
 	
 	// No polling needed - SPI driver is fully event-driven
 	// The SPIDriver uses task notifications and callbacks for all operations
@@ -147,14 +124,6 @@ void loop() {
 			// Update screen to process queued media (both SPI and local media like dots)
 			if (screen->num_queued() > 0) {
 				screen->update();
-				Serial.println("[MAIN] screen updated with remaining items: " + String(screen->num_queued()));
-			} else {
-				// Only log this occasionally to avoid spam
-				static unsigned long last_no_items_log = 0;
-				if (now - last_no_items_log > 2000) { // Every 2 seconds
-					Serial.println("[MAIN] No items left in screen queue");
-					last_no_items_log = now;
-				}
 			}
 			last_media_update = now;
 		}

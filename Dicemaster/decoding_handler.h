@@ -14,72 +14,22 @@
 #include "media.h"
 #include "protocol.h"  
 #include "constants.h"
+#include "ESP32DMASPIStream.h"
+// Forward declare SPISlaveBuffer from the actual namespace
+using SPIBuffer = ESP32DMASPI::SPISlaveBuffer;
 
 namespace dice {
 
 class Screen; // Forward declaration
 
-// Structure to hold raw SPI data copied to PSRAM
-struct SPIDataChunk {
-    size_t size;
-    uint8_t* data;
-    uint32_t timestamp;
-    
-    // Default constructor for taking ownership of existing buffer
-    SPIDataChunk() : size(0), data(nullptr), timestamp(0) {}
-    
-    SPIDataChunk(size_t sz) : size(sz), timestamp(millis()) {
-        // Allocate in PSRAM if available, otherwise regular heap
-        if (psramFound() && sz > 1024) { // Only use PSRAM for larger chunks
-            data = (uint8_t*)ps_malloc(sz);
-            if (!data) {
-                Serial.println("[DECODE] PSRAM allocation failed, trying heap for size: " + String(sz));
-                data = (uint8_t*)malloc(sz);
-            }
-        } else {
-            data = (uint8_t*)malloc(sz);
-        }
-        
-        if (!data) {
-            Serial.println("[DECODE] Memory allocation completely failed for size: " + String(sz));
-            size = 0;
-        }
-    }
-    
-    ~SPIDataChunk() {
-        // Don't free data in destructor since it may be owned by SPI driver
-        // The buffer return callback handles returning the buffer to the SPI driver
-        data = nullptr;
-    }
-    
-    // Non-copyable but movable
-    SPIDataChunk(const SPIDataChunk&) = delete;
-    SPIDataChunk& operator=(const SPIDataChunk&) = delete;
-    
-    SPIDataChunk(SPIDataChunk&& other) noexcept 
-        : size(other.size), data(other.data), timestamp(other.timestamp) {
-        other.data = nullptr;
-        other.size = 0;
-    }
-    
-    SPIDataChunk& operator=(SPIDataChunk&& other) noexcept {
-        if (this != &other) {
-            if (data) free(data);
-            size = other.size;
-            data = other.data;
-            timestamp = other.timestamp;
-            other.data = nullptr;
-            other.size = 0;
-        }
-        return *this;
-    }
-};
-
 class DecodingHandler {
 private:
     // Event-driven processing queues
-    QueueHandle_t raw_data_queue;        // Input queue for raw SPI data
+    QueueHandle_t raw_buffer_queue;      // Input queue for SPIBuffer objects
     SemaphoreHandle_t context_mutex;
+    
+    // Processing task for event-driven processing
+    TaskHandle_t processing_task_handle;
     
     // Screen reference for direct enqueueing
     Screen* screen_ref;
@@ -92,10 +42,17 @@ private:
     bool initialized;  // Track if queues/mutex are created
     
     // Buffer return callback for SPI driver
-    std::function<void(uint8_t*)> buffer_return_callback;
+    std::function<void(SPIBuffer*)> buffer_return_callback;
     
-    // Queue sizes
-    static constexpr size_t RAW_DATA_QUEUE_SIZE = 32;      // Buffer up to 32 raw SPI chunks (increased for better throughput)
+    // Queue sizes and task configuration
+    static constexpr size_t RAW_BUFFER_QUEUE_SIZE = 32;    // Buffer up to 32 SPIBuffer objects
+    static constexpr size_t PROCESSING_TASK_STACK = 8192;  // Stack size for processing task
+    
+    // Static task function for processing
+    static void processing_task_function(void* parameter);
+    
+    // Helper function to print message bytes as hex
+    void print_message_hex(const uint8_t* data, size_t size);
     
     // Event-driven processing methods (no more continuous task loop)
     MediaContainer* decode_message(const DProtocol::Message& msg);
@@ -111,14 +68,20 @@ public:
     bool initialize(Screen* screen);
     
     // Set callback for returning buffers to SPI driver when processing is complete
-    void set_buffer_return_callback(std::function<void(uint8_t*)> callback) {
+    void set_buffer_return_callback(std::function<void(SPIBuffer*)> callback) {
         buffer_return_callback = callback;
     }
     
-    // Fast enqueue: Add raw SPI data chunk to processing queue (called from SPI callback)
+    // Fast enqueue: Add SPIBuffer to processing queue (called from SPI callback)
     // Returns true if successfully queued, false if queue is full
     // Now triggers event-driven processing via notification
-    bool enqueue_raw_data(const uint8_t* data, size_t size);
+    bool enqueue_raw_buffer(SPIBuffer* buffer);
+    
+    // Legacy method for backward compatibility - deprecated
+    bool enqueue_raw_data(const uint8_t* data, size_t size) {
+        Serial.println("[DECODE] WARNING: enqueue_raw_data() is deprecated, use enqueue_raw_buffer()");
+        return false;
+    }
     
     // Event-driven processing: Process all available data (called from notified task)
     void process_available_data();
@@ -140,12 +103,18 @@ public:
     
     Statistics get_statistics() const { return stats; }
     void reset_statistics();
+    
+    // Enable/disable processing control
+    void enable_processing() { processing_enabled = true; }
+    void disable_processing() { processing_enabled = false; }
+    bool is_processing_enabled() const { return processing_enabled; }
 };
 
 // Implementation
 inline DecodingHandler::DecodingHandler() 
-    : raw_data_queue(nullptr)
+    : raw_buffer_queue(nullptr)
     , context_mutex(nullptr)
+    , processing_task_handle(nullptr)
     , screen_ref(nullptr)
     , processing_enabled(false)
     , initialized(false) 
@@ -172,139 +141,155 @@ inline bool DecodingHandler::initialize(Screen* screen) {
     screen_ref = screen;
     
     // Create FreeRTOS components
-    raw_data_queue = xQueueCreate(RAW_DATA_QUEUE_SIZE, sizeof(SPIDataChunk*));
-    if (!raw_data_queue) {
-        Serial.println("[DECODE] Failed to create raw data queue");
+    raw_buffer_queue = xQueueCreate(RAW_BUFFER_QUEUE_SIZE, sizeof(SPIBuffer*));
+    if (!raw_buffer_queue) {
+        Serial.println("[DECODE] Failed to create raw buffer queue");
         return false;
     }
     
     context_mutex = xSemaphoreCreateMutex();
     if (!context_mutex) {
         Serial.println("[DECODE] Failed to create mutex");
-        vQueueDelete(raw_data_queue);
-        raw_data_queue = nullptr;
+        vQueueDelete(raw_buffer_queue);
+        raw_buffer_queue = nullptr;
+        return false;
+    }
+    
+    // Create processing task
+    BaseType_t task_result = xTaskCreate(
+        processing_task_function,
+        "DecodingProcessor",
+        PROCESSING_TASK_STACK,
+        this,
+        4, // Medium priority - below SPI but above screen updates
+        &processing_task_handle
+    );
+    
+    if (task_result != pdPASS) {
+        Serial.println("[DECODE] Failed to create processing task");
+        vSemaphoreDelete(context_mutex);
+        vQueueDelete(raw_buffer_queue);
+        context_mutex = nullptr;
+        raw_buffer_queue = nullptr;
         return false;
     }
     
     initialized = true;
-    processing_enabled = true; // Enable processing immediately since we use synchronous calls
-    Serial.println("[DECODE] Initialized event-driven handler with direct screen enqueueing");
+    processing_enabled = true;
+    Serial.println("[DECODE] Initialized event-driven handler with dedicated processing task");
     return true;
 }
 
-inline bool DecodingHandler::enqueue_raw_data(const uint8_t* data, size_t size) {
-    if (!initialized || !raw_data_queue || !data || size == 0 || !processing_enabled) {
+inline bool DecodingHandler::enqueue_raw_buffer(SPIBuffer* buffer) {
+    if (!initialized || !raw_buffer_queue || !buffer || buffer->rx_size == 0 || !processing_enabled) {
         return false;
     }
     
-    // Create chunk wrapper that takes ownership of the existing buffer
-    SPIDataChunk* chunk = new(std::nothrow) SPIDataChunk();
-    if (!chunk) {
-        stats.raw_queue_overflows++;
-        return false;
-    }
+    Serial.println("[DECODE] Enqueueing buffer ID " + String(buffer->id) + 
+                  " with " + String(buffer->rx_size) + " bytes, queue depth: " + 
+                  String(uxQueueMessagesWaiting(raw_buffer_queue)));
     
-    // Take ownership of the existing buffer (no copy)
-    chunk->data = const_cast<uint8_t*>(data);
-    chunk->size = size;
-    chunk->timestamp = millis();
-    
-    // Try to queue (non-blocking)
-    if (xQueueSend(raw_data_queue, &chunk, 0) != pdTRUE) {
-        Serial.println("[DECODE] ERROR: Raw data queue full - dropping " + String(size) + " byte chunk");
-        delete chunk;
+    // Try to queue the buffer pointer (non-blocking)
+    if (xQueueSend(raw_buffer_queue, &buffer, 0) != pdTRUE) {
+        Serial.println("[DECODE] ERROR: Raw buffer queue full - dropping buffer ID " + String(buffer->id) + 
+                      " with " + String(buffer->rx_size) + " bytes");
         stats.raw_queue_overflows++;
         return false;
     }
     
     stats.raw_chunks_received++;
     
-    // No need to notify target task since processing will be called synchronously
+    // Notify processing task that new data is available
+    if (processing_task_handle) {
+        xTaskNotifyGive(processing_task_handle);
+    } else {
+        Serial.println("[DECODE] ERROR: Processing task handle is null, cannot notify");
+    }
+    
     return true;
 }
 
-// Event-driven processing: Process all available data chunks (called when notified)
+// Event-driven processing: Process all available buffer objects (called when notified)
 inline void DecodingHandler::process_available_data() {
-    if (!initialized || !raw_data_queue || !processing_enabled) {
+    if (!initialized || !raw_buffer_queue || !processing_enabled) {
         return;
     }
     
-    size_t chunks_processed = 0;
+    size_t buffers_processed = 0;
     size_t total_bytes = 0;
     
-    // Process all available chunks in queue (non-blocking, event-driven)
-    SPIDataChunk* chunk;
-    while (xQueueReceive(raw_data_queue, &chunk, 0) == pdTRUE) {
-        if (!chunk) continue;
+    // Process all available buffers in queue (non-blocking, event-driven)
+    SPIBuffer* buffer;
+    while (xQueueReceive(raw_buffer_queue, &buffer, 0) == pdTRUE) {
+        if (!buffer) continue;
         
         try {
-            // Each SPI chunk should contain exactly one complete message
+            // Print first 16 and last 16 bytes of the received message
+            print_message_hex(buffer->rx_buffer, buffer->rx_size);
+            
+            // Each SPI buffer should contain exactly one complete message
             DProtocol::Message msg;
             
             ErrorCode result = DProtocol::decode(
-                chunk->data, 
-                chunk->size, 
+                buffer->rx_buffer, 
+                buffer->rx_size, 
                 msg
             );
 
             if (result != ErrorCode::SUCCESS) {
-                Serial.println("[DECODE] Failed to decode SPI chunk: " + String(static_cast<int>(result)));
+                Serial.println("[DECODE] Failed to decode SPI buffer ID " + String(buffer->id) + 
+                              ": " + String(static_cast<int>(result)));
                 stats.decode_failures++;
-                delete chunk;
-                continue;
-            }
-            
-            // Successfully decoded the message
-            MediaContainer* decoded_media = decode_message(msg);
-            
-            if (decoded_media && decoded_media->get_status() == MediaStatus::READY) {
-                // Directly enqueue to screen - we need to include screen.h for this to work
-                // The include is placed at the end of this file to avoid circular dependencies
-                Serial.printf("[DECODE] Enqueueing decoded media type %d to screen\n", (int)decoded_media->get_media_type());
-                if (screen_ref) {
-                    extern bool screen_enqueue_wrapper(Screen* screen, MediaContainer* media);
-                    if (screen_enqueue_wrapper(screen_ref, decoded_media)) {
-                        stats.media_enqueued_to_screen++;
-                        Serial.println("[DECODE] Successfully enqueued media to screen");
+            } else {
+                // Successfully decoded the message
+                MediaContainer* decoded_media = decode_message(msg);
+                
+                if (decoded_media && decoded_media->get_status() == MediaStatus::READY) {
+                    if (screen_ref) {
+                        if (screen_ref->enqueue(decoded_media)) {
+                            stats.media_enqueued_to_screen++;
+                        } else {
+                            Serial.println("[DECODE] ERROR: Failed to enqueue media to screen");
+                            delete decoded_media;
+                        }
                     } else {
-                        Serial.println("[DECODE] ERROR: Failed to enqueue media to screen");
+                        Serial.println("[DECODE] ERROR: Screen reference is null");
                         delete decoded_media;
                     }
-                } else {
-                    Serial.println("[DECODE] ERROR: Screen reference is null");
-                    delete decoded_media;
                 }
+                
+                stats.messages_decoded++;
             }
-            
-            stats.messages_decoded++;
         } catch (...) {
-            Serial.println("[DECODE] ERROR: Exception during chunk processing");
+            Serial.println("[DECODE] ERROR: Exception during buffer processing");
             stats.decode_failures++;
         }
         
         // Update basic statistics
-        total_bytes += chunk->size;
-        chunks_processed++;
-        stats.total_bytes_processed += chunk->size;
-        stats.last_chunk_size = chunk->size;
+        total_bytes += buffer->rx_size;
+        buffers_processed++;
+        stats.total_bytes_processed += buffer->rx_size;
+        stats.last_chunk_size = buffer->rx_size;
+        
+        Serial.println("[DECODE] Processed buffer ID " + String(buffer->id) + 
+                      " with " + String(buffer->rx_size) + " bytes, returning buffer to SPI");
         
         // Return buffer to SPI driver for requeuing
-        if (buffer_return_callback && chunk->data) {
-            buffer_return_callback(chunk->data);
+        if (buffer_return_callback) {
+            buffer_return_callback(buffer);
+        } else {
+            Serial.println("[DECODE] ERROR: No buffer return callback set");
         }
-        
-        // Clean up chunk wrapper (but not the data, which is now owned by SPI driver)
-        delete chunk;
     }
     
-    // Simple logging for multiple chunks
-    if (chunks_processed > 1) {
-        Serial.println("[DECODE] Processed " + String(chunks_processed) + 
-                       " chunks, " + String(total_bytes) + "B");
+    // Simple logging for multiple buffers
+    if (buffers_processed > 1) {
+        Serial.println("[DECODE] Processed " + String(buffers_processed) + 
+                       " buffers, " + String(total_bytes) + "B");
     }
     
     // Update queue depth statistics
-    stats.current_raw_queue_depth = uxQueueMessagesWaiting(raw_data_queue);
+    stats.current_raw_queue_depth = uxQueueMessagesWaiting(raw_buffer_queue);
 }
 
 inline std::vector<MediaContainer*> DecodingHandler::get_decoded_media() {
@@ -317,6 +302,49 @@ inline std::vector<MediaContainer*> DecodingHandler::get_decoded_media() {
 
 inline void DecodingHandler::reset_statistics() {
     memset(&stats, 0, sizeof(stats));
+}
+
+// Helper function to print first 16 and last 16 bytes of message as hex
+inline void DecodingHandler::print_message_hex(const uint8_t* data, size_t size) {
+    if (!data || size == 0) {
+        Serial.println("[DECODE] Message hex: <empty or null data>");
+        return;
+    }
+    
+    String hex_output = "[DECODE] Message hex: ";
+    
+    // Print first 16 bytes
+    size_t first_bytes = min(size, (size_t)16);
+    for (size_t i = 0; i < first_bytes; i++) {
+        if (data[i] < 0x10) hex_output += "0";
+        hex_output += String(data[i], HEX);
+        if (i < first_bytes - 1) hex_output += " ";
+    }
+    
+    // If message is longer than 16 bytes, show last 16 bytes
+    if (size > 16) {
+        if (size <= 32) {
+            // For messages 17-32 bytes, just add remaining bytes
+            hex_output += " ";
+            for (size_t i = 16; i < size; i++) {
+                if (data[i] < 0x10) hex_output += "0";
+                hex_output += String(data[i], HEX);
+                if (i < size - 1) hex_output += " ";
+            }
+        } else {
+            // For messages > 32 bytes, show ... and last 16 bytes
+            hex_output += " ... ";
+            size_t last_start = size - 16;
+            for (size_t i = last_start; i < size; i++) {
+                if (data[i] < 0x10) hex_output += "0";
+                hex_output += String(data[i], HEX);
+                if (i < size - 1) hex_output += " ";
+            }
+        }
+    }
+    
+    hex_output += " (size: " + String(size) + " bytes)";
+    Serial.println(hex_output);
 }
 
 inline MediaContainer* DecodingHandler::decode_message(const DProtocol::Message& msg) {
@@ -495,15 +523,30 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageChunk& ic) 
     return nullptr;
 }
 
+// Static processing task function
+inline void DecodingHandler::processing_task_function(void* parameter) {
+    DecodingHandler* handler = static_cast<DecodingHandler*>(parameter);
+    
+    Serial.println("[DECODE-TASK] Processing task started, waiting for data notifications...");
+    
+    while (true) {
+        // Wait for notification from enqueue_raw_data()
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        
+        Serial.println("[DECODE-TASK] Received notification, processing available data...");
+        
+        // Process all available data
+        if (handler) {
+            handler->process_available_data();
+        } else {
+            Serial.println("[DECODE-TASK] ERROR: Handler pointer is null");
+        }
+    }
+}
+
 } // namespace dice
 
 // Include screen.h after class definitions to avoid circular dependencies
 #include "screen.h"
-
-// Wrapper function to call screen->enqueue() from decoding handler
-inline bool screen_enqueue_wrapper(dice::Screen* screen, dice::MediaContainer* media) {
-    if (!screen || !media) return false;
-    return screen->enqueue(media);
-}
 
 #endif // DICE_DECODING_HANDLER_H
