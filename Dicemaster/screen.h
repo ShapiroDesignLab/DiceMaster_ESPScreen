@@ -3,6 +3,9 @@
 
 #include <deque>
 #include <vector>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
 
 #include <Arduino_GFX_Library.h>
 #include <U8g2lib.h>
@@ -10,13 +13,19 @@
 
 namespace dice {
 
+// Screen queue configuration
+constexpr size_t SCREEN_MEDIA_QUEUE_SIZE = 32;  // Buffer up to 32 media items
+
 class Screen {
 private:
     Arduino_XCA9554SWSPI* expander;
     Arduino_ESP32RGBPanel* rgbpanel;
     Arduino_RGB_Display* gfx;
 
-    std::deque<MediaContainer*> display_queue;
+    // Single thread-safe queue for all media
+    QueueHandle_t media_queue;
+    SemaphoreHandle_t queue_mutex;  // Protect queue operations
+    
     uint16_t* screen_buffer;
     MediaContainer* current_disp;
 
@@ -42,11 +51,18 @@ private:
     void transform_coordinates(uint16_t& x, uint16_t& y, Rotation rotation);
     void set_display_rotation(Rotation rotation);
     void set_gfx_rotation_cached(Rotation rotation);  // Cached rotation setter
+    
+    // Simplified queue processing - no need for internal transfer
+    // void process_incoming_media();  // No longer needed
 
 public:
     Screen();
+    ~Screen();
+    
+    // Initialize screen queues (called after constructor)
+    bool initialize_queues();
 
-    void enqueue(MediaContainer* med);
+    bool enqueue(MediaContainer* med);
 
     void update();
 
@@ -58,7 +74,6 @@ public:
 
     // Demo functions
     void draw_startup_logo();
-    void draw_revolving_logo();
 };
 
 // Demo Functions

@@ -27,12 +27,24 @@ void show_loading_dots() {
 			dots_text += ".";
 		}
 		
-		// Create and display loading dots
+		// Create and display loading dots with detailed logging
+		Serial.println("[LOADING] Creating TextGroup and Text objects...");
 		auto* loading_group = new TextGroup(0, DICE_BLACK, DICE_WHITE);
 		Text* loading_text = new Text("" + dots_text, 0, FontID::TF, 50, 120);
+		Serial.println("[LOADING] Created Text: '" + dots_text + "' at position (50, 120)");
+		
 		loading_group->add_member(loading_text);
-		screen->enqueue(loading_group);
-		Serial.println("[LOADING] Displaying loading dots: " + dots_text);
+		Serial.printf("[LOADING] TextGroup created with %d members, status: %d\n", 
+		              (int)loading_group->size(), (int)loading_group->get_status());
+		
+		bool enqueue_success = screen->enqueue(loading_group);
+		Serial.printf("[LOADING] Enqueue result: %s for dots: %s\n", 
+		              enqueue_success ? "SUCCESS" : "FAILED", dots_text.c_str());
+		
+		if (!enqueue_success) {
+			Serial.println("[LOADING] ERROR: Failed to enqueue loading dots - deleting objects");
+			delete loading_group; // This will also delete the text member
+		}
 		
 		// Cycle dots count: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> back to 1
 		dots_count++;
@@ -57,8 +69,18 @@ void setup(void){
 	screen = new Screen();
 	test_suite = new TestSuite(screen, spid);  // Initialize test suite
 	
+	// Initialize screen thread-safe queues
+	if (!screen->initialize_queues()) {
+		Serial.println("Failed to initialize screen queues!");
+		while(1) delay(1000); // Halt on failure
+	}
+	
+	// Now that queues are initialized, display the startup logo
+	screen->draw_startup_logo();
+	screen->update(); // Display the logo immediately
+	
 	// Initialize SPI with callback-based processing
-	if (!spid->initialize()) {
+	if (!spid->initialize(screen)) {
 		Serial.println("Failed to initialize SPI driver!");
 		while(1) delay(1000); // Halt on failure
 	}
@@ -73,10 +95,8 @@ void setup(void){
 
 void loop() {
 	static unsigned long last_media_update = 0;
-	static unsigned long last_poll_time = 0;
 	static unsigned long last_loop_debug = 0;
 	const unsigned long MEDIA_UPDATE_INTERVAL = 16; // 60Hz (~16ms) - faster screen updates
-	const unsigned long POLL_INTERVAL = 1; // Poll SPI every 1ms for maximum responsiveness
 	
 	unsigned long now = millis();
 	
@@ -86,11 +106,8 @@ void loop() {
 		last_loop_debug = now;
 	}
 	
-	// Poll SPI transactions at high frequency for fastest response (all modes)
-	if (now - last_poll_time >= POLL_INTERVAL) {
-		spid->poll_transactions();
-		last_poll_time = now;
-	}
+	// No polling needed - SPI driver is fully event-driven
+	// The SPIDriver uses task notifications and callbacks for all operations
 	
 	switch (current_mode) {
 		case SystemMode::DEMO:
@@ -124,30 +141,20 @@ void loop() {
 	
 	// Update screen and process decoded media at 60Hz for all modes except DEMO
 	// (DEMO mode handles its own timing)
+	// NOTE: SPI decoded media is now automatically enqueued to screen via decoding handler
 	if (current_mode != SystemMode::DEMO) {
 		if (now - last_media_update >= MEDIA_UPDATE_INTERVAL) {
-			// Get decoded media from the decoding handler
-			std::vector<MediaContainer*> new_content = spid->get_decoded_media();
-			if (new_content.size() > 0) {
-				Serial.println("[MAIN] Retrieved " + String(new_content.size()) + " media items");
-				
-				// Increment messages received counter
-				messages_received_counter += new_content.size();
-				
-				// Debug: Log each retrieved image
-				for (size_t i = 0; i < new_content.size(); ++i) {
-					if (new_content[i]->get_media_type() == MediaType::IMAGE) {
-						Serial.println("[MAIN] Retrieved Image ID " + String(new_content[i]->get_image_id()) + 
-						               " - Status: " + String((int)new_content[i]->get_status()));
-					}
-					screen->enqueue(new_content[i]);
-				}
-			}
-				
-			// Update screen
+			// Update screen to process queued media (both SPI and local media like dots)
 			if (screen->num_queued() > 0) {
 				screen->update();
-				// Serial.println("[MAIN] screen updated with remaining items: " + String(screen->num_queued()));
+				Serial.println("[MAIN] screen updated with remaining items: " + String(screen->num_queued()));
+			} else {
+				// Only log this occasionally to avoid spam
+				static unsigned long last_no_items_log = 0;
+				if (now - last_no_items_log > 2000) { // Every 2 seconds
+					Serial.println("[MAIN] No items left in screen queue");
+					last_no_items_log = now;
+				}
 			}
 			last_media_update = now;
 		}
@@ -196,7 +203,9 @@ void run_production_mode() {
 	// Main loop processes decoded media at 30Hz
 	
 	// Show loading dots animation if no messages have been received yet
-	if (messages_received_counter == 0) {
+	// Check SPI statistics to see if we've received any decoded media
+	auto spi_stats = spid->get_decode_statistics();
+	if (spi_stats.media_enqueued_to_screen == 0) {
 		show_loading_dots();
 	}
 	
@@ -238,8 +247,8 @@ void run_spi_debug_mode() {
         Serial.println("[DEBUG] T:" + String(transaction_count) + 
                        " D:" + String(decode_stats.messages_decoded) + 
                        " F:" + String(decode_stats.decode_failures) + 
-                       " SOF:" + String(decode_stats.sof_marker_errors) +
-                       " Q:" + String(decode_stats.current_raw_queue_depth) + "/" + String(decode_stats.current_decoded_queue_depth) +
+                       " Q:" + String(decode_stats.current_raw_queue_depth) + 
+                       " S:" + String(decode_stats.media_enqueued_to_screen) +
                        " H:" + String(free_heap / 1024) + "KB" +
                        " P:" + String(free_psram / 1024) + "KB" +
                        " Overflows:" + String(decode_stats.raw_queue_overflows));

@@ -9,26 +9,58 @@ void printHeapStatus() {
     String heapInfo = "Free Heap: " + String(ESP.getFreePsram()) + " bytes";
     Serial.println(heapInfo);
 }
-
 bool Screen::is_next_ready() {
-    if (display_queue.empty()) {
+    if (!media_queue || !queue_mutex) return false;
+
+    if (xSemaphoreTake(queue_mutex, pdMS_TO_TICKS(10)) != pdTRUE) return false;
+
+    // Check if queue has items
+    if (uxQueueMessagesWaiting(media_queue) == 0) {
+        xSemaphoreGive(queue_mutex);
         return false;
     }
-    while ((!display_queue.empty()) && display_queue.front()->get_status() > MediaStatus::READY) {
-        MediaContainer* m = display_queue.front();
-        display_queue.pop_front();
-        
-        // Debug: Log when images are being deleted due to expiration
-        if (m->get_media_type() == MediaType::IMAGE) {
-            Serial.println("[SCREEN] Deleting expired Image ID " + String(m->get_image_id()) + 
-                           " - Status: " + String((int)m->get_status()));
+
+    // Peek at the front item without removing it
+    MediaContainer* front_media;
+    if (xQueuePeek(media_queue, &front_media, 0) != pdTRUE || !front_media) {
+        xSemaphoreGive(queue_mutex);
+        return false;
+    }
+
+    // Clean up expired items from the front
+    while (front_media && front_media->get_status() > MediaStatus::READY) {
+        // Remove and delete expired item
+        if (xQueueReceive(media_queue, &front_media, 0) != pdTRUE) break;
+
+        if (front_media->get_media_type() == MediaType::IMAGE) {
+            Serial.println("[SCREEN] Deleting expired Image ID " + String(front_media->get_image_id()) +
+                           " - Status: " + String((int)front_media->get_status()));
+        } else if (front_media->get_media_type() == MediaType::TEXTGROUP) {
+            Serial.println("[SCREEN] Deleting expired TextGroup - Status: " + String((int)front_media->get_status()));
+        } else if (front_media->get_media_type() == MediaType::TEXT) {
+            Serial.println("[SCREEN] Deleting expired Text - Status: " + String((int)front_media->get_status()));
         }
-        delete m;
+        delete front_media;
+        front_media = nullptr;
+
+        // Check if there's another item to peek at
+        if (uxQueueMessagesWaiting(media_queue) == 0) break;
+
+        xQueuePeek(media_queue, &front_media, 0);
     }
-    if (display_queue.empty()) {
-        return false;
+
+    // Check if we have a ready item after cleanup
+    bool result = front_media && front_media->get_status() == MediaStatus::READY;
+    if (result) {
+        Serial.printf("[SCREEN] Front item type: %d, status: %d, ready result: true\n",
+                      (int)front_media->get_media_type(), (int)front_media->get_status());
     }
-    return (display_queue.front()->get_status() == MediaStatus::READY);
+
+    Serial.println("[SCREEN] Queue check - Items: " + String(uxQueueMessagesWaiting(media_queue)) + 
+                   ", Ready: " + String(result ? "true" : "false"));
+
+    xSemaphoreGive(queue_mutex);
+    return result;
 }
 
 // Draw image
@@ -197,6 +229,9 @@ void Screen::draw_textgroup(MediaContainer* tg) {
     if (tg->get_media_type() != MediaType::TEXTGROUP){
         return;
     }
+    
+    Serial.println("[SCREEN] Drawing TextGroup...");
+    
     // Use the TextGroup's background color, not hardcoded DICE_DARKGREY
     draw_color(tg->get_bg_color());
     gfx->setTextSize(2);
@@ -209,10 +244,15 @@ void Screen::draw_textgroup(MediaContainer* tg) {
     set_display_rotation(rotation);
 
     MediaContainer* next = tg->get_next();
+    int text_count = 0;
     while (next != nullptr) {
+        text_count++;
+        Serial.println("[SCREEN] Drawing text item " + String(text_count) + ": " + next->get_txt());
         draw_text(next, rotation, text_color);  // Pass text color to draw_text
         next = tg->get_next();
     }
+    
+    Serial.println("[SCREEN] TextGroup drawing complete, rendered " + String(text_count) + " text items");
 }
 
 void Screen::draw_text(MediaContainer* txt, Rotation rotation, uint16_t text_color) {
@@ -256,33 +296,51 @@ void Screen::draw_text(MediaContainer* txt) {
 }
 
 void Screen::display_next() {
-    if (display_queue.empty()) {
-        return;
-    }
+    if (!media_queue || !queue_mutex) return;
     
-    if (current_disp != nullptr) {
-        delay(10); // Give any running tasks a moment
-        delete current_disp;
-    }
+    if (xSemaphoreTake(queue_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (uxQueueMessagesWaiting(media_queue) == 0) {
+            xSemaphoreGive(queue_mutex);
+            return;
+        }
+        
+        if (current_disp != nullptr) {
+            delay(10); // Give any running tasks a moment
+            delete current_disp;
+        }
 
-    current_disp = display_queue.front();
-    display_queue.pop_front();
-
-    switch (current_disp->get_media_type()) {
-    case MediaType::IMAGE:
-        draw_img(current_disp);
-        break;
-    case MediaType::TEXTGROUP:
-        draw_textgroup(current_disp);
-        break;
-    case MediaType::TEXT:
-        draw_text(current_disp);
-        break;
-    default:
-        Serial.println("Unsupported Media Type Encountered!");
-        break;
+        MediaContainer* next_media;
+        if (xQueueReceive(media_queue, &next_media, 0) == pdTRUE && next_media) {
+            current_disp = next_media;
+        } else {
+            xSemaphoreGive(queue_mutex);
+            return;
+        }
+        
+        xSemaphoreGive(queue_mutex);
+        
+        Serial.printf("[SCREEN] Displaying media type: %d\n", (int)current_disp->get_media_type());
+        
+        // Perform rendering outside of mutex to avoid blocking other threads
+        switch (current_disp->get_media_type()) {
+        case MediaType::IMAGE:
+            Serial.println("[SCREEN] Calling draw_img()");
+            draw_img(current_disp);
+            break;
+        case MediaType::TEXTGROUP:
+            Serial.println("[SCREEN] Calling draw_textgroup()");
+            draw_textgroup(current_disp);
+            break;
+        case MediaType::TEXT:
+            Serial.println("[SCREEN] Calling draw_text()");
+            draw_text(current_disp);
+            break;
+        default:
+            Serial.println("Unsupported Media Type Encountered!");
+            break;
+        }
+        current_disp->trigger_display();
     }
-    current_disp->trigger_display();
 }
 
 Screen::Screen()
@@ -297,8 +355,10 @@ Screen::Screen()
         // 4.0" 480x480 rectangle bar display
         480 /* width */, 480 /* height */, rgbpanel, 0 /* rotation */, true /* auto_flush */, expander,
         GFX_NOT_DEFINED /* RST */, tl040wvs03_init_operations, sizeof(tl040wvs03_init_operations)))
+    , media_queue(nullptr)
     , screen_buffer((uint16_t*) ps_malloc(gfx->width() * gfx->height() * sizeof(uint16_t)))
     , current_disp(nullptr)
+    , queue_mutex(nullptr)
     , current_gfx_rotation(Rotation::ROT_0) {  // Initialize rotation cache
 #ifdef GFX_EXTRA_PRE_INIT
     GFX_EXTRA_PRE_INIT();
@@ -319,33 +379,101 @@ Screen::Screen()
     expander->pinMode(PCA_TFT_BACKLIGHT, OUTPUT);
     expander->digitalWrite(PCA_TFT_BACKLIGHT, HIGH);
 
-    draw_startup_logo();
+    // Note: draw_startup_logo() will be called after initialize_queues() in main
 
     Serial.println("Screen Initialized!");
 }
 
+Screen::~Screen() {
+    // Resources persist for lifetime of application on ESP32
+    // No manual cleanup needed since ESP32 will reset
+}
 
-void Screen::enqueue(MediaContainer* med) {
-    // If nothing is added
-    if (med == nullptr) return;
+bool Screen::initialize_queues() {
+    // Create single thread-safe queue for all media
+    media_queue = xQueueCreate(SCREEN_MEDIA_QUEUE_SIZE, sizeof(MediaContainer*));
+    if (!media_queue) {
+        Serial.println("[SCREEN] Failed to create media queue");
+        return false;
+    }
+    
+    // Create mutex for queue operations
+    queue_mutex = xSemaphoreCreateMutex();
+    if (!queue_mutex) {
+        Serial.println("[SCREEN] Failed to create queue mutex");
+        vQueueDelete(media_queue);
+        media_queue = nullptr;
+        return false;
+    }
+    
+    Serial.println("[SCREEN] Single thread-safe queue initialized");
+    return true;
+}
 
-    // If adding image or text
-    if (med->get_media_type() == MediaType::IMAGE || med->get_media_type() == MediaType::TEXTGROUP
-        || med->get_media_type() == MediaType::TEXT) {
-        display_queue.push_back(med);
-        
-        // Debug: Log when images are enqueued with their status and duration
+
+bool Screen::enqueue(MediaContainer* med) {
+    if (med == nullptr) {
+        Serial.println("[SCREEN] ERROR: Cannot enqueue null media");
+        return false;
+    }
+
+    if (!media_queue || !queue_mutex) {
+        Serial.println("[SCREEN] ERROR: Queue not initialized, cannot enqueue media");
+        return false;
+    }
+
+    Serial.printf("[SCREEN] Attempting to enqueue media type: %d with image ID: %d\n", 
+                  (int)med->get_media_type(), med->get_image_id());
+
+    if (med->get_media_type() != MediaType::IMAGE && 
+        med->get_media_type() != MediaType::TEXTGROUP && 
+        med->get_media_type() != MediaType::TEXT) {
+        return false;
+    }
+
+    if (xSemaphoreTake(queue_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (xQueueSend(media_queue, &med, 0) != pdTRUE) {
+            Serial.println("[SCREEN] WARNING: Media queue full, dropping media item");
+            if (med->get_media_type() == MediaType::IMAGE) {
+                Serial.println("[SCREEN] Dropped Image ID " + String(med->get_image_id()));
+            }
+            xSemaphoreGive(queue_mutex);
+            delete med;  // Clean up if we can't queue it
+            return false;
+        }
+
+        int queue_size = uxQueueMessagesWaiting(media_queue);
+        xSemaphoreGive(queue_mutex);
+
         if (med->get_media_type() == MediaType::IMAGE) {
             Serial.println("[SCREEN] Enqueued Image ID " + String(med->get_image_id()) + 
                            " - Status: " + String((int)med->get_status()) + 
-                           ", Queue size: " + String(display_queue.size()));
+                           " - Queue size: " + String(queue_size));
+        } else if (med->get_media_type() == MediaType::TEXTGROUP) {
+            Serial.println("[SCREEN] Enqueued TextGroup - Status: " + String((int)med->get_status()) + 
+                           " - Queue size: " + String(queue_size));
+        } else if (med->get_media_type() == MediaType::TEXT) {
+            Serial.println("[SCREEN] Enqueued Text - Status: " + String((int)med->get_status()) + 
+                           " - Queue size: " + String(queue_size));
         }
-        return;
+
+        return true;
+    } else {
+        Serial.println("[SCREEN] ERROR: Failed to acquire queue mutex");
+        delete med;
+        return false;
     }
-    return;
 }
 
 void Screen::update() {
+    // Debug: Log update calls periodically (every 5 seconds)
+    static unsigned long last_debug_time = 0;
+    unsigned long current_time = millis();
+    if (current_time - last_debug_time > 5000) {
+        Serial.println("[SCREEN] Update called - checking queue...");
+        last_debug_time = current_time;
+    }
+    
     // If next is emergency like option, we dump enforced time rule
     // If next is ready and current image expires, we move on;
     if (!is_next_ready()) {   // If there is nothing to show, just return
@@ -376,10 +504,18 @@ bool Screen::up_button_pressed() {
 }
 
 int Screen::num_queued() {
-    return display_queue.size();
+    if (!media_queue || !queue_mutex) return 0;
+    
+    int count = 0;
+    if (xSemaphoreTake(queue_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        count = uxQueueMessagesWaiting(media_queue);
+        xSemaphoreGive(queue_mutex);
+    }
+    return count;
 }
 
 void Screen::draw_startup_logo() {
+    Serial.println("[SCREEN] Drawing startup logo...");
     try {
       MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ480, logo_SIZE, 500, 1, Rotation::ROT_0);
       int input_time = millis();
@@ -387,34 +523,17 @@ void Screen::draw_startup_logo() {
       while (med->get_status() != MediaStatus::READY) {
         delay(5);
       }
+      Serial.println("[SCREEN] Startup logo decoded successfully, enqueueing...");
       enqueue(med);
+      Serial.println("[SCREEN] Startup logo enqueued");
     }
     catch (...) {
+      Serial.println("[SCREEN] ERROR: Startup Logo Decoding Failed");
       MediaContainer* err = print_error("Startup Logo Decoding Failed");
       enqueue(err);
     }
 }
 
-void Screen::draw_revolving_logo() {
-    if (num_queued() > 1) {
-        return;
-    }
-    const uint8_t* img_arr = revolving_umlogo_array[revolv_idx];
-    int img_size = revolving_umlogo_sizes[revolv_idx];
-    try {
-      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ240, img_size, 1, 1, Rotation::ROT_0);
-      int input_time = millis();
-      med->add_chunk(img_arr, img_size);
-      while (med->get_status() != MediaStatus::READY) {
-        delay(1);
-      }
-      enqueue(med);
-      revolv_idx = (revolv_idx+1) % revolving_umlogo_num;
-    }
-    catch (...) {
-      MediaContainer* err = print_error("Revolving Logo Decoding Failed");
-      enqueue(err);
-    }
-}
+// }
 
 }   // namespace dice
