@@ -6,7 +6,7 @@
 using namespace dice;
 
 // Global variable definitions
-uint8_t SCREEN_ID = 0;  // Define the screen ID variable
+uint8_t SCREEN_ID = 2;  // Define the screen ID variable
 
 Screen* screen;
 SPIDriver* spid;

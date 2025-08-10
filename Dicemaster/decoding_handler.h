@@ -54,6 +54,9 @@ private:
     // Helper function to print message bytes as hex
     void print_message_hex(const uint8_t* data, size_t size);
     
+    // Helper function to return buffer to SPI driver with proper error checking
+    void return_buffer_to_spi(SPIBuffer* buffer);
+    
     // Event-driven processing methods (no more continuous task loop)
     MediaContainer* decode_message(const DProtocol::Message& msg);
     MediaContainer* handle(const DProtocol::TextBatch& tb);
@@ -246,6 +249,9 @@ inline void DecodingHandler::process_available_data() {
                 Serial.println("[DECODE] ERROR: Failed to decode SPI buffer ID " + String(buffer->id) + 
                               ": " + String(static_cast<int>(result)));
                 stats.decode_failures++;
+                
+                // Return buffer to SPI driver for requeuing even on decode failure
+                return_buffer_to_spi(buffer);
                 continue;
             }
 
@@ -257,6 +263,9 @@ inline void DecodingHandler::process_available_data() {
             if (!decoded_media) {
                 // Serial.println("[DECODE] DEBUG: decode_message returned null (still processing multi-chunk media)");
                 stats.messages_decoded++;
+                
+                // Return buffer to SPI driver for requeuing
+                return_buffer_to_spi(buffer);
                 continue;
             }
             
@@ -267,6 +276,9 @@ inline void DecodingHandler::process_available_data() {
                 Serial.println("[DECODE] ERROR: Screen reference is null");
                 delete decoded_media;
                 stats.messages_decoded++;
+                
+                // Return buffer to SPI driver for requeuing
+                return_buffer_to_spi(buffer);
                 continue;
             }
 
@@ -282,6 +294,16 @@ inline void DecodingHandler::process_available_data() {
         } catch (...) {
             Serial.println("[DECODE] ERROR: Exception during buffer processing");
             stats.decode_failures++;
+            
+            // Return buffer to SPI driver for requeuing even on exception
+            return_buffer_to_spi(buffer);
+            
+            // Update basic statistics and continue to next buffer
+            total_bytes += buffer->rx_size;
+            buffers_processed++;
+            stats.total_bytes_processed += buffer->rx_size;
+            stats.last_chunk_size = buffer->rx_size;
+            continue;
         }
 
         // Update basic statistics
@@ -294,11 +316,7 @@ inline void DecodingHandler::process_available_data() {
         //               " with " + String(buffer->rx_size) + " bytes, returning buffer to SPI");
 
         // Return buffer to SPI driver for requeuing
-        if (buffer_return_callback) {
-            buffer_return_callback(buffer);
-        } else {
-            Serial.println("[DECODE] ERROR: No buffer return callback set");
-        }
+        return_buffer_to_spi(buffer);
     }
 
     // Simple logging for multiple buffers
@@ -356,6 +374,15 @@ inline void DecodingHandler::print_message_hex(const uint8_t* data, size_t size)
     
     hex_output += " (size: " + String(size) + " bytes)";
     Serial.println(hex_output);
+}
+
+// Helper function to return buffer to SPI driver with proper error checking
+inline void DecodingHandler::return_buffer_to_spi(SPIBuffer* buffer) {
+    if (buffer_return_callback) {
+        buffer_return_callback(buffer);
+    } else {
+        Serial.println("[DECODE] ERROR: No buffer return callback set");
+    }
 }
 
 inline MediaContainer* DecodingHandler::decode_message(const DProtocol::Message& msg) {

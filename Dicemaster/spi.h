@@ -28,7 +28,6 @@ class Screen;
 // SPI Buffer Sizes and Configuration
 constexpr size_t SPI_BUFFER_SIZE = 8192;       // 8KB DMA buffers
 constexpr size_t BUFFER_POOL_SIZE = 16;         // Number of circulating buffers
-constexpr size_t LOW_BUFFER_THRESHOLD = 2;     // Threshold for low buffer warning
 constexpr size_t DECODE_TASK_STACK = 12288;    // Stack size for decode task
 constexpr size_t REQUEUE_TASK_STACK = 2048;    // Stack size for requeue task
 
@@ -181,10 +180,9 @@ inline SPIDriver::SPIDriver(Screen* screen)
     });
     
     // Start the pipeline by queueing initial buffers
-    size_t initial_buffers = BUFFER_POOL_SIZE - LOW_BUFFER_THRESHOLD;
-    Serial.println("[SPI] About to queue " + String(initial_buffers) + " initial buffers");
+    Serial.println("[SPI] About to queue " + String(BUFFER_POOL_SIZE) + " initial buffers");
     
-    for (size_t i = 0; i < initial_buffers; i++) {
+    for (size_t i = 0; i < BUFFER_POOL_SIZE; i++) {
         SPIBuffer* buf = &buffer_pool[i];
         if (slave.queue(buf)) {
             Serial.println("[SPI] Queued initial buffer ID " + String(buf->id));
