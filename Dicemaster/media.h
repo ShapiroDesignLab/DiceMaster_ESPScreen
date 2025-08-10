@@ -106,16 +106,15 @@ private:
     static int JPEGDraw240(JPEGDRAW* pDraw);
     static void decodeTask(void* pvParameters) {
         Image* img = static_cast<Image*>(pvParameters);
+        // Serial.println("[IMAGE-TASK] DEBUG: Decode task started for image ID " + String(img->get_image_id()));
         img->decode();
+        // Serial.println("[IMAGE-TASK] DEBUG: Decode task completed for image ID " + String(img->get_image_id()) + 
+        //               ", final status: " + String(static_cast<int>(img->get_status())));
         // Clear the handle before deleting the task to prevent double-delete
         img->decodeTaskHandle = nullptr;
         vTaskDelete(nullptr);   // Delete task after completion
     }
     void decode();
-    // void upscale_2x();
-    // void upscale_2x_y();
-    // Testing only
-    // void mask_up(int32_t start, int32_t len);
     void startDecode();
 
 public:

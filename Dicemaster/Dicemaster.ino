@@ -5,6 +5,9 @@
 #include "esp_heap_caps.h"
 using namespace dice;
 
+// Global variable definitions
+uint8_t SCREEN_ID = 0;  // Define the screen ID variable
+
 Screen* screen;
 SPIDriver* spid;
 TestSuite* test_suite;
@@ -121,10 +124,9 @@ void loop() {
 	// NOTE: SPI decoded media is now automatically enqueued to screen via decoding handler
 	if (current_mode != SystemMode::DEMO) {
 		if (now - last_media_update >= MEDIA_UPDATE_INTERVAL) {
-			// Update screen to process queued media (both SPI and local media like dots)
-			if (screen->num_queued() > 0) {
-				screen->update();
-			}
+			// Always call screen->update() to check for new media
+			// Don't rely only on num_queued() as it might miss timing-sensitive updates
+			screen->update();
 			last_media_update = now;
 		}
 	}

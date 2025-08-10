@@ -54,16 +54,18 @@ private:
     
     // Event-driven pipeline tasks
     TaskHandle_t decode_task_handle;
-    TaskHandle_t requeue_task_handle;
     
-    // Pipeline queues (zero-copy: only buffer pointers flow through)
-    QueueHandle_t requeue_queue;     // SPIBuffer* → requeue task
+    // Synchronization for direct requeue calls
+    SemaphoreHandle_t requeue_mutex;
     
     // Decoding handler for protocol processing
     DecodingHandler* decoding_handler;
     
     // Buffer return method for decoding handler callback
     void return_buffer_for_requeue(SPIBuffer* buffer);
+    
+    // Direct blocking requeue function
+    bool requeue_buffer(SPIBuffer* buffer);
     
     // Statistics
     volatile size_t transaction_count = 0;
@@ -72,7 +74,6 @@ private:
     
     // Pipeline task functions
     static void decode_task_function(void* parameter);
-    static void requeue_task_function(void* parameter);
     
     // Event-driven completion callback
     void on_spi_complete(const uint8_t* rx_buf, size_t bytes);
@@ -104,7 +105,6 @@ public:
         size_t transaction_count;
         size_t buffers_processed;
         size_t decode_errors;
-        size_t requeue_queue_depth;
     };
     
     SPIDriverStats get_driver_statistics() const;
@@ -114,8 +114,7 @@ public:
 inline SPIDriver::SPIDriver(Screen* screen) 
     : decoding_handler(nullptr)
     , decode_task_handle(nullptr)
-    , requeue_task_handle(nullptr)
-    , requeue_queue(nullptr) {
+    , requeue_mutex(nullptr) {
     
     // Initialize buffer pool with IDs
     for (size_t i = 0; i < BUFFER_POOL_SIZE; i++) {
@@ -151,10 +150,10 @@ inline SPIDriver::SPIDriver(Screen* screen)
         while(1) delay(1000); // Halt on critical failure
     }
     
-    // Create pipeline queues (only buffer pointers, not data)
-    requeue_queue = xQueueCreate(BUFFER_POOL_SIZE * 2, sizeof(SPIBuffer*));
-    if (!requeue_queue) {
-        Serial.println("[SPI] FATAL: Failed to create requeue queue in constructor");
+    // Create mutex for thread-safe requeue operations
+    requeue_mutex = xSemaphoreCreateMutex();
+    if (!requeue_mutex) {
+        Serial.println("[SPI] FATAL: Failed to create requeue mutex in constructor");
         while(1) delay(1000); // Halt on critical failure
     }
     
@@ -168,17 +167,8 @@ inline SPIDriver::SPIDriver(Screen* screen)
         &decode_task_handle
     );
     
-    BaseType_t requeue_result = xTaskCreate(
-        requeue_task_function,
-        "SPI_Requeue", 
-        REQUEUE_TASK_STACK,
-        this,
-        4, // Slightly lower priority
-        &requeue_task_handle
-    );
-    
-    if (decode_result != pdPASS || requeue_result != pdPASS) {
-        Serial.println("[SPI] FATAL: Failed to create pipeline tasks in constructor");
+    if (decode_result != pdPASS) {
+        Serial.println("[SPI] FATAL: Failed to create decode task in constructor");
         while(1) delay(1000); // Halt on critical failure
     }
     
@@ -187,7 +177,7 @@ inline SPIDriver::SPIDriver(Screen* screen)
     
     // Set up buffer return callback for decoding handler
     decoding_handler->set_buffer_return_callback([this](SPIBuffer* buffer) {
-        this->return_buffer_for_requeue(buffer);
+        this->requeue_buffer(buffer);
     });
     
     // Start the pipeline by queueing initial buffers
@@ -232,78 +222,61 @@ inline void SPIDriver::decode_task_function(void* parameter) {
                 
                 // Still need to requeue the buffer even on error
                 if (result.buffer) {
-                    if (xQueueSend(driver->requeue_queue, &result.buffer, 0) != pdTRUE) {
-                        Serial.println("[SPI-DECODE] Failed to requeue error buffer ID " + String(result.buffer->id));
-                    }
+                    driver->requeue_buffer(result.buffer);
                 }
                 continue;
             }
             
             SPIBuffer* buffer = result.buffer;
-            Serial.println("[SPI-DECODE] Received " + String(buffer->rx_size) + " bytes in buffer ID " + String(buffer->id));
+            // Serial.println("[SPI-DECODE] Received " + String(buffer->rx_size) + " bytes in buffer ID " + String(buffer->id));
             
             // Send to decode handler for protocol processing
-            // The decoding handler now owns the buffer and will return it when done
-            if (driver->decoding_handler) {
-                bool enqueue_success = driver->decoding_handler->enqueue_raw_buffer(buffer);
-                
-                if (!enqueue_success) {
-                    Serial.println("[SPI-DECODE] Failed to enqueue buffer ID " + String(buffer->id) + " with " + String(buffer->rx_size) + " bytes");
-                    driver->decode_errors++;
-                    // If enqueue failed, we need to requeue the buffer ourselves
-                    if (xQueueSend(driver->requeue_queue, &buffer, 0) != pdTRUE) {
-                        Serial.println("[SPI-DECODE] Failed to requeue buffer ID " + String(buffer->id) + " after decode failure");
-                    }
-                }
-                // If enqueue succeeded, the decoding handler now owns the buffer
-                // and will return it via a callback when processing is complete
-            } else {
+            if (!driver->decoding_handler) {
                 // No decoding handler, return buffer immediately
-                if (xQueueSend(driver->requeue_queue, &buffer, 0) != pdTRUE) {
-                    Serial.println("[SPI-DECODE] Failed to requeue buffer ID " + String(buffer->id) + " (no decoder)");
-                }
+                driver->requeue_buffer(buffer);
+                driver->buffers_processed++;
+                continue;
+            }
+
+            // The decoding handler now owns the buffer and will return it when done
+            if (!driver->decoding_handler->enqueue_raw_buffer(buffer)) {
+                Serial.println("[SPI-DECODE] Failed to enqueue buffer ID " + String(buffer->id) + " with " + String(buffer->rx_size) + " bytes");
+                driver->decode_errors++;
+                // If enqueue failed, we need to requeue the buffer ourselves
+                driver->requeue_buffer(buffer);
             }
             driver->buffers_processed++;
         }
     }
 }
 
-inline void SPIDriver::requeue_task_function(void* parameter) {
-    SPIDriver* driver = static_cast<SPIDriver*>(parameter);
-    SPIBuffer* buffer;
+inline bool SPIDriver::requeue_buffer(SPIBuffer* buffer) {
+    if (!buffer) return false;
     
-    Serial.println("[SPI-REQUEUE] Requeue task started");
+    Serial.println("[SPI-REQUEUE] Requeuing buffer ID " + String(buffer->id));
     
-    while (true) {
-        // Wait for buffer to requeue
-        if (xQueueReceive(driver->requeue_queue, &buffer, portMAX_DELAY) == pdTRUE) {
-            Serial.println("[SPI-REQUEUE] Got buffer ID " + String(buffer->id) + " to requeue");
-            
-            // Reset buffer state for next use
-            buffer->rx_size = 0;
-            buffer->timestamp = 0;
-            
-            // Immediately requeue the buffer for next SPI transaction
-            bool requeue_success = driver->slave.requeue(buffer);
-            
-            if (!requeue_success) {
-                Serial.println("[SPI-REQUEUE] Failed to requeue buffer ID " + String(buffer->id));
-            } else {
-                Serial.println("[SPI-REQUEUE] Successfully requeued buffer ID " + String(buffer->id));
-            }
+    // Thread-safe requeue operation
+    if (xSemaphoreTake(requeue_mutex, portMAX_DELAY) == pdTRUE) {
+        // Reset buffer state for next use
+        buffer->reset(0);
+        
+        // Immediately requeue the buffer for next SPI transaction
+        bool requeue_success = slave.requeue(buffer);
+        
+        xSemaphoreGive(requeue_mutex);
+        
+        if (!requeue_success) {
+            Serial.println("[SPI-REQUEUE] Failed to requeue buffer ID " + String(buffer->id));
         }
+        // } else {
+        //     Serial.println("[SPI-REQUEUE] Successfully requeued buffer ID " + String(buffer->id));
+        // }
+        
+        return requeue_success;
     }
-}
-
-inline void SPIDriver::return_buffer_for_requeue(SPIBuffer* buffer) {
-    if (!buffer) return;
     
-    Serial.println("[SPI] Decoder returning buffer ID " + String(buffer->id) + " to requeue");
-    
-    // Send buffer to requeue task for recycling
-    if (xQueueSend(requeue_queue, &buffer, 0) != pdTRUE) {
-        Serial.println("[SPI] Requeue queue full when returning buffer ID " + String(buffer->id) + " from decoder");
-    }
+    Serial.println("[SPI-REQUEUE] Failed to acquire mutex for buffer ID " + String(buffer->id));
+    return false;
 }
 
 inline DecodingHandler::Statistics SPIDriver::get_decode_statistics() const {
@@ -318,7 +291,6 @@ inline SPIDriver::SPIDriverStats SPIDriver::get_driver_statistics() const {
     stats.transaction_count = transaction_count;
     stats.buffers_processed = buffers_processed;
     stats.decode_errors = decode_errors;
-    stats.requeue_queue_depth = requeue_queue ? uxQueueMessagesWaiting(requeue_queue) : 0;
     
     return stats;
 }
@@ -328,14 +300,14 @@ inline SPIDriver::SPIDriverStats SPIDriver::get_driver_statistics() const {
 /*
  * Event-Driven SPI Pipeline Summary:
  * 
- * This implementation uses an event-driven zero-copy pipeline that minimizes 
- * processing overhead with simplified buffer management:
+ * This implementation uses an event-driven zero-copy pipeline with direct blocking
+ * requeue operations that minimizes processing overhead:
  * 
  * 1. Buffer Pool: Fixed array of DMA buffers that circulate through the pipeline
- * 2. Event Flow: SPI completion → decode task notification → processing → requeue
- * 3. Zero Copy: Buffer pointers flow through queues instead of copying data
- * 4. Streaming: Buffers are immediately re-queued after processing
- * 5. Simplified: No buffer usage tracking - buffers always flow through pipeline
+ * 2. Event Flow: SPI completion → decode task notification → processing → direct requeue
+ * 3. Zero Copy: Buffer pointers flow through pipeline without data copying
+ * 4. Blocking Requeue: Direct synchronous buffer requeuing with mutex protection
+ * 5. Simplified: No separate requeue task or queue management needed
  * 6. Unified API: Single queue() method handles TX/RX via nullptr parameters
  * 7. Event-Driven Decoding: No continuous task loops, purely notification-based
  * 
@@ -343,8 +315,8 @@ inline SPIDriver::SPIDriverStats SPIDriver::get_driver_statistics() const {
  * - All buffers start queued in SPI hardware
  * - On completion → decode task processes data
  * - Decoder owns buffer during processing
- * - When done, decoder returns buffer via callback
- * - Requeue task immediately re-submits to SPI hardware
+ * - When done, decoder calls blocking requeue function directly
+ * - Buffer is immediately re-submitted to SPI hardware
  * - Cycle repeats indefinitely
  * 
  * Security Improvements:
@@ -354,14 +326,16 @@ inline SPIDriver::SPIDriverStats SPIDriver::get_driver_statistics() const {
  * - Resource exhaustion protection
  * - Memory initialization to prevent data leakage
  * - Proper error propagation and handling
+ * - Thread-safe requeue operations with mutex protection
  * 
  * Benefits:
  * - Lower latency through event-driven notifications
  * - Reduced memory usage through zero-copy design  
  * - Better throughput with immediate buffer recycling
- * - Simplified codebase without buffer usage tracking
+ * - Simplified codebase without separate requeue task
  * - Enhanced security through comprehensive validation
- * - Eliminates buffer "used" field bugs through design simplification
+ * - Thread-safe operations with minimal overhead
+ * - Eliminates queue management complexity
  */
 
 #endif

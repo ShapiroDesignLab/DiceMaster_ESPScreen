@@ -50,7 +50,7 @@ struct SPISlaveBuffer {
     uint8_t* tx_buffer;       // TX buffer pointer (nullptr for RX-only)
     uint8_t* rx_buffer;       // RX buffer pointer (nullptr for TX-only)
     size_t tx_capacity;       // TX buffer capacity
-    size_t rx_capacity;       // RX buffer capacity  
+    size_t rx_capacity;       // RX buffer capacity
     size_t tx_size;           // Actual TX data size
     size_t rx_size;           // Actual RX data received
     uint32_t timestamp;       // Timestamp when transaction completed
@@ -64,6 +64,13 @@ struct SPISlaveBuffer {
         : id(buf_id), tx_buffer(tx_buf), rx_buffer(rx_buf), 
           tx_capacity(tx_cap), rx_capacity(rx_cap), tx_size(0), rx_size(0),
           timestamp(0), in_flight(false) {}
+
+    void reset(size_t tx_size) {
+        this->tx_size = tx_size;
+        rx_size = 0;
+        timestamp = -1;
+        in_flight = false;
+    }
 };
 
 struct spi_slave_context_t {

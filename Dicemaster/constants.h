@@ -5,6 +5,7 @@
 #include <string>
 #include <map>
 
+extern uint8_t SCREEN_ID;
 
 // Enums for Media Status
 enum class MediaStatus : uint8_t {
@@ -118,6 +119,7 @@ enum class ErrorCode : uint8_t {
     INVALID_MESSAGE_TYPE = 0x12,
     INVALID_LENGTH_FIELD = 0x13,
     HEADER_LENGTH_MISMATCH = 0x14,
+    SCREEN_ID_MISMATCH = 0x15,
     
     // TextBatch specific errors
     TEXT_PAYLOAD_TOO_SHORT = 0x20,

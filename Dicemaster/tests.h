@@ -231,7 +231,7 @@ private:
             
             textMsg->hdr.marker = ::SOF_MARKER;
             textMsg->hdr.type = MessageType::TEXT_BATCH;
-            textMsg->hdr.id = 100;
+            textMsg->hdr.screenId = 100;
             
             textMsg->payload.tag = TAG_TEXT_BATCH;
             TextBatch& tb = textMsg->payload.u.textBatch;
@@ -249,7 +249,7 @@ private:
             Serial.println("[DEBUG] Validating message structure:");
             Serial.println("  Marker: 0x" + String(textMsg->hdr.marker, HEX));
             Serial.println("  Type: " + String(static_cast<int>(textMsg->hdr.type)));
-            Serial.println("  ID: " + String(textMsg->hdr.id));
+            Serial.println("  ID: " + String(textMsg->hdr.screenId));
             Serial.println("  Payload tag: " + String(static_cast<int>(textMsg->payload.tag)));
             Serial.println("  Item count: " + String(tb.itemCount));
             
@@ -360,7 +360,7 @@ private:
             
             textMsg->hdr.marker = ::SOF_MARKER;
             textMsg->hdr.type = MessageType::TEXT_BATCH;
-            textMsg->hdr.id = 101;
+            textMsg->hdr.screenId = 101;
             
             textMsg->payload.tag = TAG_TEXT_BATCH;
             TextBatch& tb = textMsg->payload.u.textBatch;
@@ -440,7 +440,7 @@ private:
             
             imgMsg->hdr.marker = ::SOF_MARKER;
             imgMsg->hdr.type = MessageType::IMAGE_TRANSFER_START;
-            imgMsg->hdr.id = 200;
+            imgMsg->hdr.screenId = 200;
             
             imgMsg->payload.tag = TAG_IMAGE_START;
             ImageStart& is = imgMsg->payload.u.imageStart;
@@ -518,7 +518,7 @@ private:
             
             animMsg->hdr.marker = ::SOF_MARKER;
             animMsg->hdr.type = MessageType::IMAGE_TRANSFER_START;
-            animMsg->hdr.id = 300 + frame;
+            animMsg->hdr.screenId = 300 + frame;
             
             animMsg->payload.tag = TAG_IMAGE_START;
             ImageStart& is = animMsg->payload.u.imageStart;
@@ -605,7 +605,7 @@ private:
             
             rotMsg->hdr.marker = ::SOF_MARKER;
             rotMsg->hdr.type = MessageType::TEXT_BATCH;
-            rotMsg->hdr.id = 400 + rot;
+            rotMsg->hdr.screenId = 400 + rot;
             
             rotMsg->payload.tag = TAG_TEXT_BATCH;
             TextBatch& tb = rotMsg->payload.u.textBatch;
@@ -712,7 +712,7 @@ private:
             
             colorMsg->hdr.marker = ::SOF_MARKER;
             colorMsg->hdr.type = MessageType::TEXT_BATCH;
-            colorMsg->hdr.id = 500;
+            colorMsg->hdr.screenId = 500;
             
             colorMsg->payload.tag = TAG_TEXT_BATCH;
             TextBatch& tb = colorMsg->payload.u.textBatch;
@@ -812,7 +812,7 @@ private:
                 
                 testMsg->hdr.marker = ::SOF_MARKER;
                 testMsg->hdr.type = MessageType::TEXT_BATCH;
-                testMsg->hdr.id = 1;
+                testMsg->hdr.screenId = 1;
                 
                 testMsg->payload.tag = TAG_TEXT_BATCH;
                 TextBatch& tb = testMsg->payload.u.textBatch;
@@ -867,7 +867,7 @@ private:
                 
                 testMsg->hdr.marker = ::SOF_MARKER;
                 testMsg->hdr.type = MessageType::IMAGE_TRANSFER_START;
-                testMsg->hdr.id = 2;
+                testMsg->hdr.screenId = 2;
                 
                 testMsg->payload.tag = TAG_IMAGE_START;
                 ImageStart& is = testMsg->payload.u.imageStart;
@@ -920,7 +920,7 @@ private:
                 
                 testMsg->hdr.marker = ::SOF_MARKER;
                 testMsg->hdr.type = MessageType::PING_RESPONSE;
-                testMsg->hdr.id = 42;
+                testMsg->hdr.screenId = 42;
                 
                 testMsg->payload.tag = TAG_PING_RESPONSE;
                 PingResponse& pr = testMsg->payload.u.pingResponse;
@@ -965,7 +965,7 @@ private:
                 
                 testMsg->hdr.marker = 0xFF; // Invalid marker
                 testMsg->hdr.type = MessageType::TEXT_BATCH;
-                testMsg->hdr.id = 999;
+                testMsg->hdr.screenId = 999;
                 
                 uint8_t buffer[256];
                 size_t size = encode(buffer, sizeof(buffer), *testMsg);
@@ -1026,7 +1026,7 @@ public:
         
         msg->hdr.marker = ::SOF_MARKER;  // Use global SOF_MARKER from constants.h
         msg->hdr.type = MessageType::TEXT_BATCH;
-        msg->hdr.id = 1;
+        msg->hdr.screenId = 1;
         
         msg->payload.tag = TAG_TEXT_BATCH;
         TextBatch& tb = msg->payload.u.textBatch;

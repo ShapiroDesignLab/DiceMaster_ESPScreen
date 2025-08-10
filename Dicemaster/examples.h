@@ -365,7 +365,7 @@ bool test_protocol_encode_decode() {
     // Create a test message with rotation
     testMsg->hdr.marker = ::SOF_MARKER;
     testMsg->hdr.type = MessageType::TEXT_BATCH;
-    testMsg->hdr.id = 1;
+    testMsg->hdr.screenId = 1;
     
     // Create test payload with rotation
     testMsg->payload.tag = TAG_TEXT_BATCH;
@@ -596,7 +596,7 @@ bool test_image_protocol_encode_decode() {
     // Create image start message with rotation
     testMsg->hdr.marker = ::SOF_MARKER;
     testMsg->hdr.type = MessageType::IMAGE_TRANSFER_START;
-    testMsg->hdr.id = 2;
+    testMsg->hdr.screenId = 2;
     
     testMsg->payload.tag = TAG_IMAGE_START;
     ImageStart& is = testMsg->payload.u.imageStart;
@@ -665,7 +665,7 @@ uint8_t* create_ack_message(ErrorCode status, uint8_t msg_id) {
     Message ackMsg;
     ackMsg.hdr.marker = ::SOF_MARKER;
     ackMsg.hdr.type = MessageType::ACK;
-    ackMsg.hdr.id = msg_id;
+    ackMsg.hdr.screenId = msg_id;
     
     ackMsg.payload.tag = TAG_ACK;
     ackMsg.payload.u.ack.status = status;
@@ -693,7 +693,7 @@ uint8_t* create_error_message(ErrorCode error_code, const char* error_text, uint
     Message errorMsg;
     errorMsg.hdr.marker = ::SOF_MARKER;
     errorMsg.hdr.type = MessageType::ERROR;
-    errorMsg.hdr.id = msg_id;
+    errorMsg.hdr.screenId = msg_id;
     
     errorMsg.payload.tag = TAG_ERROR;
     errorMsg.payload.u.error.code = error_code;

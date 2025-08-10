@@ -34,7 +34,7 @@ namespace DProtocol {
 struct MessageHeader {
     uint8_t  marker;        // should be SOF_MARKER
     MessageType  type;
-    uint8_t  id;
+    uint8_t  screenId;      // Screen ID (was previously message ID)
     uint16_t length;
 };
 
@@ -152,11 +152,11 @@ inline uint32_t readBE(const uint8_t* src, uint8_t sz)
 // -----------------------------------------------------------------------
 //  HEADER EN/DE-CODE
 // -----------------------------------------------------------------------
-inline void encodeHeader(uint8_t* out, MessageType t, uint8_t id, uint16_t len)
+inline void encodeHeader(uint8_t* out, MessageType t, uint8_t screenId, uint16_t len)
 {
     out[0] = ::SOF_MARKER;  // Use global SOF_MARKER from constants.h
     out[1] = static_cast<uint8_t>(t);
-    out[2] = id;
+    out[2] = screenId;
     writeBE(out+3, len, 2);
 }
 
@@ -171,11 +171,22 @@ inline ErrorCode decodeHeader(const uint8_t* buf, size_t sz, MessageHeader& h)
     
     h.marker = buf[0];
     h.type   = static_cast<MessageType>(msg_type);
-    h.id     = buf[2];
+    h.screenId = buf[2];
     h.length = static_cast<uint16_t>(readBE(buf+3, 2));
     
     // Validate that we have enough data for the claimed payload length
     if(sz < 5 + h.length) return ErrorCode::HEADER_LENGTH_MISMATCH;
+    
+    // Check if the k-th bit in the screen ID matches with SCREEN_ID
+    // CAN-bus like behavior: check if this message is intended for this screen
+    // If SCREEN_ID = 2, we check if bit 2 (0x04) is set in h.screenId
+    uint8_t screenBitMask = 1 << ::SCREEN_ID;  // Create mask for k-th bit
+    if((h.screenId & screenBitMask) == 0) {
+        // The k-th bit is not set, this message is not for this screen
+        Serial.println("[SPI] Screen ID mismatch: expected bit " + String(::SCREEN_ID) + 
+                      " set in 0x" + String(h.screenId, HEX) + ", mask: 0x" + String(screenBitMask, HEX));
+        return ErrorCode::SCREEN_ID_MISMATCH;
+    }
     
     return ErrorCode::SUCCESS;
 }
@@ -319,7 +330,7 @@ inline size_t encode(uint8_t* buffer, size_t bufferSize, const Message& msg)
     if(payloadLen > maxPayloadSize) return 0; // Payload too large
     
     // Encode header
-    encodeHeader(buffer, msg.hdr.type, msg.hdr.id, static_cast<uint16_t>(payloadLen));
+    encodeHeader(buffer, msg.hdr.type, msg.hdr.screenId, static_cast<uint16_t>(payloadLen));
     
     return 5 + payloadLen;
 }
@@ -376,7 +387,7 @@ inline ErrorCode decodeTextBatch(const uint8_t* p, size_t len, TextBatch& tb)
     size_t offset = 6;
     Serial.println("[TEXT BATCH] Decoding TextBatch with " + String(tb.itemCount) + " items at " + String(len) + " bytes");
     for(uint8_t i = 0; i < tb.itemCount; ++i) {
-        Serial.println("[TEXT BATCH] Decoding item " + String(i));
+        // Serial.println("[TEXT BATCH] Decoding item " + String(i));
         if(offset + 8 > len) return ErrorCode::TEXT_ITEM_HEADER_TOO_SHORT;
         
         TextItem& item = tb.items[i];

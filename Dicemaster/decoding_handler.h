@@ -76,13 +76,7 @@ public:
     // Returns true if successfully queued, false if queue is full
     // Now triggers event-driven processing via notification
     bool enqueue_raw_buffer(SPIBuffer* buffer);
-    
-    // Legacy method for backward compatibility - deprecated
-    bool enqueue_raw_data(const uint8_t* data, size_t size) {
-        Serial.println("[DECODE] WARNING: enqueue_raw_data() is deprecated, use enqueue_raw_buffer()");
-        return false;
-    }
-    
+
     // Event-driven processing: Process all available data (called from notified task)
     void process_available_data();
     
@@ -129,7 +123,6 @@ inline DecodingHandler::~DecodingHandler() {
 
 inline bool DecodingHandler::initialize(Screen* screen) {
     if (initialized) {
-        Serial.println("[DECODE] Already initialized");
         return true;
     }
     
@@ -182,12 +175,17 @@ inline bool DecodingHandler::initialize(Screen* screen) {
 
 inline bool DecodingHandler::enqueue_raw_buffer(SPIBuffer* buffer) {
     if (!initialized || !raw_buffer_queue || !buffer || buffer->rx_size == 0 || !processing_enabled) {
+        Serial.println("[DECODE] DEBUG: enqueue_raw_buffer failed - initialized:" + String(initialized) + 
+                      ", has_queue:" + String(raw_buffer_queue != nullptr) + 
+                      ", has_buffer:" + String(buffer != nullptr) + 
+                      ", buffer_size:" + String(buffer ? buffer->rx_size : 0) + 
+                      ", processing_enabled:" + String(processing_enabled));
         return false;
     }
     
-    Serial.println("[DECODE] Enqueueing buffer ID " + String(buffer->id) + 
-                  " with " + String(buffer->rx_size) + " bytes, queue depth: " + 
-                  String(uxQueueMessagesWaiting(raw_buffer_queue)));
+    // Serial.println("[DECODE] DEBUG: Enqueueing buffer ID " + String(buffer->id) + 
+    //               " with " + String(buffer->rx_size) + " bytes, queue depth: " + 
+    //               String(uxQueueMessagesWaiting(raw_buffer_queue)));
     
     // Try to queue the buffer pointer (non-blocking)
     if (xQueueSend(raw_buffer_queue, &buffer, 0) != pdTRUE) {
@@ -212,8 +210,14 @@ inline bool DecodingHandler::enqueue_raw_buffer(SPIBuffer* buffer) {
 // Event-driven processing: Process all available buffer objects (called when notified)
 inline void DecodingHandler::process_available_data() {
     if (!initialized || !raw_buffer_queue || !processing_enabled) {
+        Serial.println("[DECODE] DEBUG: process_available_data failed - initialized:" + String(initialized) + 
+                      ", has_queue:" + String(raw_buffer_queue != nullptr) + 
+                      ", processing_enabled:" + String(processing_enabled));
         return;
     }
+    
+    // Serial.println("[DECODE] DEBUG: Starting data processing, queue depth: " + 
+    //               String(uxQueueMessagesWaiting(raw_buffer_queue)));
     
     size_t buffers_processed = 0;
     size_t total_bytes = 0;
@@ -222,58 +226,73 @@ inline void DecodingHandler::process_available_data() {
     SPIBuffer* buffer;
     while (xQueueReceive(raw_buffer_queue, &buffer, 0) == pdTRUE) {
         if (!buffer) continue;
-        
+
         try {
+            // Serial.println("[DECODE] DEBUG: Processing buffer ID " + String(buffer->id) + 
+            //               " with " + String(buffer->rx_size) + " bytes");
+            
             // Print first 16 and last 16 bytes of the received message
-            print_message_hex(buffer->rx_buffer, buffer->rx_size);
+            // Serial.print("[DECODE] Raw data (first 16 bytes): ");
+            // for (size_t i = 0; i < min((size_t)16, buffer->rx_size); i++) {
+            //     Serial.printf("%02X ", buffer->rx_buffer[i]);
+            // }
+            // Serial.println();
             
             // Each SPI buffer should contain exactly one complete message
             DProtocol::Message msg;
-            
-            ErrorCode result = DProtocol::decode(
-                buffer->rx_buffer, 
-                buffer->rx_size, 
-                msg
-            );
+            ErrorCode result = DProtocol::decode(buffer->rx_buffer, buffer->rx_size, msg);
 
             if (result != ErrorCode::SUCCESS) {
-                Serial.println("[DECODE] Failed to decode SPI buffer ID " + String(buffer->id) + 
+                Serial.println("[DECODE] ERROR: Failed to decode SPI buffer ID " + String(buffer->id) + 
                               ": " + String(static_cast<int>(result)));
                 stats.decode_failures++;
-            } else {
-                // Successfully decoded the message
-                MediaContainer* decoded_media = decode_message(msg);
-                
-                if (decoded_media && decoded_media->get_status() == MediaStatus::READY) {
-                    if (screen_ref) {
-                        if (screen_ref->enqueue(decoded_media)) {
-                            stats.media_enqueued_to_screen++;
-                        } else {
-                            Serial.println("[DECODE] ERROR: Failed to enqueue media to screen");
-                            delete decoded_media;
-                        }
-                    } else {
-                        Serial.println("[DECODE] ERROR: Screen reference is null");
-                        delete decoded_media;
-                    }
-                }
-                
-                stats.messages_decoded++;
+                continue;
             }
+
+            // Serial.println("[DECODE] DEBUG: Successfully decoded message, tag: " + 
+            //               String(static_cast<uint8_t>(msg.payload.tag)));
+
+            // Successfully decoded the message
+            MediaContainer* decoded_media = decode_message(msg);
+            if (!decoded_media) {
+                // Serial.println("[DECODE] DEBUG: decode_message returned null (still processing multi-chunk media)");
+                stats.messages_decoded++;
+                continue;
+            }
+            
+            // Serial.println("[DECODE] DEBUG: Media ready! Type: " + String(static_cast<int>(decoded_media->get_media_type())) + 
+            //               ", attempting to enqueue to screen");
+
+            if (!screen_ref) {
+                Serial.println("[DECODE] ERROR: Screen reference is null");
+                delete decoded_media;
+                stats.messages_decoded++;
+                continue;
+            }
+
+            if (!screen_ref->enqueue(decoded_media)) {
+                Serial.println("[DECODE] ERROR: Failed to enqueue media to screen");
+                delete decoded_media;
+            } else {
+                // Serial.println("[DECODE] SUCCESS: Media enqueued to screen successfully");
+                stats.media_enqueued_to_screen++;
+            }
+
+            stats.messages_decoded++;
         } catch (...) {
             Serial.println("[DECODE] ERROR: Exception during buffer processing");
             stats.decode_failures++;
         }
-        
+
         // Update basic statistics
         total_bytes += buffer->rx_size;
         buffers_processed++;
         stats.total_bytes_processed += buffer->rx_size;
         stats.last_chunk_size = buffer->rx_size;
-        
-        Serial.println("[DECODE] Processed buffer ID " + String(buffer->id) + 
-                      " with " + String(buffer->rx_size) + " bytes, returning buffer to SPI");
-        
+
+        // Serial.println("[DECODE] Processed buffer ID " + String(buffer->id) + 
+        //               " with " + String(buffer->rx_size) + " bytes, returning buffer to SPI");
+
         // Return buffer to SPI driver for requeuing
         if (buffer_return_callback) {
             buffer_return_callback(buffer);
@@ -281,23 +300,15 @@ inline void DecodingHandler::process_available_data() {
             Serial.println("[DECODE] ERROR: No buffer return callback set");
         }
     }
-    
+
     // Simple logging for multiple buffers
-    if (buffers_processed > 1) {
-        Serial.println("[DECODE] Processed " + String(buffers_processed) + 
-                       " buffers, " + String(total_bytes) + "B");
-    }
+    // if (buffers_processed > 1) {
+    //     Serial.println("[DECODE] Processed " + String(buffers_processed) + 
+    //                    " buffers, " + String(total_bytes) + "B");
+    // }
     
     // Update queue depth statistics
     stats.current_raw_queue_depth = uxQueueMessagesWaiting(raw_buffer_queue);
-}
-
-inline std::vector<MediaContainer*> DecodingHandler::get_decoded_media() {
-    // NOTE: This method is deprecated since we now directly enqueue to screen
-    // Kept for API compatibility but returns empty vector
-    std::vector<MediaContainer*> result;
-    Serial.println("[DECODE] WARNING: get_decoded_media() called but media is now directly enqueued to screen");
-    return result;
 }
 
 inline void DecodingHandler::reset_statistics() {
@@ -349,33 +360,52 @@ inline void DecodingHandler::print_message_hex(const uint8_t* data, size_t size)
 
 inline MediaContainer* DecodingHandler::decode_message(const DProtocol::Message& msg) {
     if (xSemaphoreTake(context_mutex, portMAX_DELAY) != pdTRUE) {
+        Serial.println("[DECODE] ERROR: Failed to acquire context mutex");
         return nullptr;
     }
+    
+    // Serial.println("[DECODE] DEBUG: decode_message called with tag: " + String(static_cast<uint8_t>(msg.payload.tag)));
     
     MediaContainer* result = nullptr;
     
     switch (msg.payload.tag) {
         case DProtocol::TAG_TEXT_BATCH:
+            // Serial.println("[DECODE] DEBUG: Processing TEXT_BATCH");
             result = handle(msg.payload.u.textBatch);
             break;
             
         case DProtocol::TAG_IMAGE_START:
+            // Serial.println("[DECODE] DEBUG: Processing IMAGE_START for image ID " + String(msg.payload.u.imageStart.imgId));
             result = handle(msg.payload.u.imageStart);
             break;
             
         case DProtocol::TAG_IMAGE_CHUNK:
+            // Serial.println("[DECODE] DEBUG: Processing IMAGE_CHUNK for image ID " + String(msg.payload.u.imageChunk.imgId) + 
+            //               ", chunk ID " + String(msg.payload.u.imageChunk.chunkId));
             result = handle(msg.payload.u.imageChunk);
             break;
             
         case DProtocol::TAG_BACKLIGHT_ON:
+            // Serial.println("[DECODE] DEBUG: Processing BACKLIGHT_ON");
+            // Handle backlight control (no media container needed)
+            break;
+            
         case DProtocol::TAG_BACKLIGHT_OFF:
+            // Serial.println("[DECODE] DEBUG: Processing BACKLIGHT_OFF");
             // Handle backlight control (no media container needed)
             break;
             
         default:
-            Serial.println("[DECODE] Unknown tag: " + String(static_cast<uint8_t>(msg.payload.tag)));
+            Serial.println("[DECODE] ERROR: Unknown tag: " + String(static_cast<uint8_t>(msg.payload.tag)));
             break;
     }
+    
+    // if (result) {
+    //     Serial.println("[DECODE] DEBUG: decode_message returning media, type: " + String(static_cast<int>(result->get_media_type())) + 
+    //                   ", status: " + String(static_cast<int>(result->get_status())));
+    // } else {
+    //     Serial.println("[DECODE] DEBUG: decode_message returning null");
+    // }
     
     xSemaphoreGive(context_mutex);
     return result;
@@ -383,21 +413,36 @@ inline MediaContainer* DecodingHandler::decode_message(const DProtocol::Message&
 
 // Message handlers (adapted from spi_task_handler.h)
 inline MediaContainer* DecodingHandler::handle(const DProtocol::TextBatch& tb) {
+    // Serial.println("[DECODE] DEBUG: Creating TextGroup with " + String(tb.itemCount) + " items, " +
+    //               "bgColor: 0x" + String(tb.bgColor, HEX) + ", rotation: " + String(tb.rotation));
+    
     auto* group = new TextGroup(0, tb.bgColor, 0xFFFF);
     
     for (uint8_t i = 0; i < tb.itemCount; ++i) {
         const auto& item = tb.items[i];
         String text_str = String(item.text).substring(0, item.len);
         
+        // Serial.println("[DECODE] DEBUG: Adding text item " + String(i) + ": '" + text_str + 
+        //               "' at (" + String(item.x) + "," + String(item.y) + "), " +
+        //               "font: " + String(item.font) + ", color: 0x" + String(item.color, HEX));
+        
         Text* text_obj = new Text(text_str, 5000, static_cast<FontID>(item.font), item.x, item.y, item.color);
         group->add_member(text_obj);
     }
     
     group->set_rotation(static_cast<Rotation>(tb.rotation));
+    // Serial.println("[DECODE] DEBUG: TextGroup created successfully, status: " + String(static_cast<int>(group->get_status())));
     return group;
 }
 
 inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageStart& is) {
+    // Serial.println("[DECODE] DEBUG: ImageStart - ID: " + String(is.imgId) + 
+    //               ", totalSize: " + String(is.totalSize) + "B, " +
+    //               "numChunks: " + String(is.numChunks) + ", " +
+    //               "delayMs: " + String(is.delayMs) + ", " +
+    //               "fmtRes: 0x" + String(is.fmtRes, HEX) + ", " +
+    //               "rotation: " + String(is.rotation));
+    
     // Clean up any existing transfer with the same ID
     if (ongoing_transfers.count(is.imgId)) {
         Serial.println("[DECODE] WARNING: Replacing transfer ID " + String(is.imgId));
@@ -411,11 +456,14 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageStart& is) 
     ImageFormat fmt = static_cast<ImageFormat>(is.fmtRes >> 4);
     ImageResolution res = static_cast<ImageResolution>(is.fmtRes & 0x0F);
     
+    // Serial.println("[DECODE] DEBUG: Parsed format: " + String(static_cast<int>(fmt)) + 
+    //               ", resolution: " + String(static_cast<int>(res)));
+    
     // Only log for larger images or multiple chunks
-    if (is.totalSize > 10000 || is.numChunks > 5) {
-        Serial.println("[DECODE] Image ID " + String(is.imgId) + ": " + 
-                       String(is.totalSize) + "B, " + String(is.numChunks) + " chunks (includes embedded chunk 0)");
-    }
+    // if (is.totalSize > 10000 || is.numChunks > 5) {
+    //     Serial.println("[DECODE] Image ID " + String(is.imgId) + ": " + 
+    //                    String(is.totalSize) + "B, " + String(is.numChunks) + " chunks (includes embedded chunk 0)");
+    // }
     
     // Record expected chunks for this image
     expected_chunks[is.imgId] = is.numChunks;
@@ -433,14 +481,17 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageStart& is) 
         return nullptr;
     }
     
+    // Serial.println("[DECODE] DEBUG: Created Image object, status: " + String(static_cast<int>(img->get_status())));
+    
     // Process embedded chunk 0 if present
     if (is.embeddedChunk.length > 0 && is.embeddedChunk.data != nullptr) {
-        Serial.println("[DECODE] Processing embedded chunk 0 for ID " + String(is.imgId) + 
-                       " (" + String(is.embeddedChunk.length) + " bytes)");
+        // Serial.println("[DECODE] DEBUG: Processing embedded chunk 0 for ID " + String(is.imgId) + 
+        //                " (" + String(is.embeddedChunk.length) + " bytes)");
         img->add_chunk_with_id(is.embeddedChunk.data, is.embeddedChunk.length, 0);
         received_chunks[is.imgId] = 1; // First chunk received
+        // Serial.println("[DECODE] DEBUG: Added embedded chunk 0, image status: " + String(static_cast<int>(img->get_status())));
     } else {
-        Serial.println("[DECODE] WARNING: No embedded chunk 0 data in ImageStart for ID " + String(is.imgId));
+        // Serial.println("[DECODE] WARNING: No embedded chunk 0 data in ImageStart for ID " + String(is.imgId));
         received_chunks[is.imgId] = 0; // No chunks received yet
     }
     
@@ -449,7 +500,8 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageStart& is) 
     
     // Check if this was the only chunk (single-chunk image)
     if (is.numChunks == 1) {
-        Serial.println("[DECODE] Single-chunk image complete for ID " + String(is.imgId));
+        // Serial.println("[DECODE] DEBUG: Single-chunk image complete for ID " + String(is.imgId) + 
+        //               ", final status: " + String(static_cast<int>(img->get_status())));
         MediaContainer* completed = img;
         ongoing_transfers.erase(is.imgId);
         expected_chunks.erase(is.imgId);
@@ -457,6 +509,9 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageStart& is) 
         transfer_start_time.erase(is.imgId);
         return completed;
     }
+    
+    // Serial.println("[DECODE] DEBUG: Multi-chunk image started for ID " + String(is.imgId) + 
+    //               ", waiting for " + String(is.numChunks - 1) + " more chunks");
     
     return nullptr;
 }
@@ -477,23 +532,23 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageChunk& ic) 
     uint8_t expected_chunk_id = received_count; // Expected chunk ID = current received count
     
     // Debug: Track chunk sequence and detect gaps
-    Serial.println("[CHUNK-SEQ] Image " + String(ic.imgId) + 
-                   " - ChunkID: " + String(ic.chunkId) + 
-                   " (expected: " + String(expected_chunk_id) + ")" +
-                   ", Length: " + String(ic.length) + " bytes" +
-                   ", Progress: " + String(received_count + 1) + "/" + String(expected_total));
+    // Serial.println("[CHUNK-SEQ] Image " + String(ic.imgId) + 
+    //                " - ChunkID: " + String(ic.chunkId) + 
+    //                " (expected: " + String(expected_chunk_id) + ")" +
+    //                ", Length: " + String(ic.length) + " bytes" +
+    //                ", Progress: " + String(received_count + 1) + "/" + String(expected_total));
     
     // Check for sequence gaps (chunks should be sequential starting from 1)
-    if (ic.chunkId != expected_chunk_id) {
-        Serial.println("[CHUNK-GAP] Image " + String(ic.imgId) + 
-                       " - Expected chunk " + String(expected_chunk_id) + 
-                       " but got " + String(ic.chunkId) + "!");
-        if (ic.chunkId > expected_chunk_id) {
-            Serial.println("[CHUNK-MISSING] Image " + String(ic.imgId) + 
-                           " is missing chunks " + String(expected_chunk_id) + 
-                           " through " + String(ic.chunkId - 1));
-        }
-    }
+    // if (ic.chunkId != expected_chunk_id) {
+    //     Serial.println("[CHUNK-GAP] Image " + String(ic.imgId) + 
+    //                    " - Expected chunk " + String(expected_chunk_id) + 
+    //                    " but got " + String(ic.chunkId) + "!");
+    //     if (ic.chunkId > expected_chunk_id) {
+    //         Serial.println("[CHUNK-MISSING] Image " + String(ic.imgId) + 
+    //                        " is missing chunks " + String(expected_chunk_id) + 
+    //                        " through " + String(ic.chunkId - 1));
+    //     }
+    // }
     
     // Increment received count after processing
     received_chunks[ic.imgId]++;
@@ -506,19 +561,26 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageChunk& ic) 
     
     // Add the chunk data with ID tracking
     img->add_chunk_with_id(ic.data, ic.length, ic.chunkId);
+    // Serial.println("[DECODE] DEBUG: Added chunk " + String(ic.chunkId) + " to image " + String(ic.imgId) + 
+    //               ", image status: " + String(static_cast<int>(img->get_status())));
     
     // Check if transfer is complete (all chunks received)
     if (received_chunks[ic.imgId] >= expected_total) {
-        Serial.println("[DECODE] Image ID " + String(ic.imgId) + " transfer complete: " + 
-                       String(received_chunks[ic.imgId]) + "/" + String(expected_total) + " chunks");
+        Serial.println("[DECODE] SUCCESS: Image ID " + String(ic.imgId) + " transfer complete: " + 
+                       String(received_chunks[ic.imgId]) + "/" + String(expected_total) + " chunks, " +
+                       "final status: " + String(static_cast<int>(img->get_status())));
         
         MediaContainer* complete = img;
         ongoing_transfers.erase(it);
         expected_chunks.erase(ic.imgId);
         received_chunks.erase(ic.imgId);
         transfer_start_time.erase(ic.imgId);
+        // Serial.println("[DECODE] Image ID " + String(ic.imgId) + " returning complete");
         return complete;
     }
+    
+    Serial.println("[DECODE] DEBUG: Image ID " + String(ic.imgId) + " still waiting for more chunks: " +
+                  String(received_chunks[ic.imgId]) + "/" + String(expected_total));
     
     return nullptr;
 }
@@ -526,21 +588,16 @@ inline MediaContainer* DecodingHandler::handle(const DProtocol::ImageChunk& ic) 
 // Static processing task function
 inline void DecodingHandler::processing_task_function(void* parameter) {
     DecodingHandler* handler = static_cast<DecodingHandler*>(parameter);
-    
     Serial.println("[DECODE-TASK] Processing task started, waiting for data notifications...");
     
     while (true) {
-        // Wait for notification from enqueue_raw_data()
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         
-        Serial.println("[DECODE-TASK] Received notification, processing available data...");
-        
-        // Process all available data
-        if (handler) {
-            handler->process_available_data();
-        } else {
+        if (!handler) {
             Serial.println("[DECODE-TASK] ERROR: Handler pointer is null");
+            continue;
         }
+        handler->process_available_data();
     }
 }
 

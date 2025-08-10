@@ -213,6 +213,8 @@ int Image::JPEGDraw240(JPEGDRAW* pDraw) {
 
 
 void Image::decode() {
+    // Serial.println("[IMAGE] DEBUG: decode() started for image ID " + String(image_id));
+    
     // Check if we still have valid content
     if (content == nullptr || decoded_content == nullptr) {
         Serial.println("[IMAGE] ERROR: Invalid buffers for ID " + String(image_id));
@@ -230,6 +232,9 @@ void Image::decode() {
         }
     }
     
+    // Serial.println("[IMAGE] DEBUG: Starting JPEG decoding for ID " + String(image_id) + 
+    //               ", content size: " + String(total_size) + " bytes");
+    
     // Feed watchdog before starting intensive operation
     esp_task_wdt_reset();
     
@@ -238,12 +243,17 @@ void Image::decode() {
     // Set the drawing function based on resolution
     int (*JPEGDraw) (JPEGDRAW*) = (resolution == ImageResolution::SQ240) ? JPEGDraw240 : JPEGDraw480;
     
+    // Serial.println("[IMAGE] DEBUG: Opening JPEG RAM buffer for ID " + String(image_id));
+    
     // Decode
     if (jpeg.openRAM(content, total_size, JPEGDraw)) {
+        // Serial.println("[IMAGE] DEBUG: JPEG opened successfully for ID " + String(image_id) + 
+        //               ", starting decode...");
         jpeg.setUserPointer(this);
         esp_task_wdt_reset();
         
         if (jpeg.decode(0, 0, 0)) {
+            // Serial.println("[IMAGE] SUCCESS: JPEG decode completed for ID " + String(image_id));
             set_status(MediaStatus::READY);
         } else {
             Serial.println("[IMAGE] ERROR: JPEG decode failed for ID " + String(image_id));
@@ -258,13 +268,15 @@ void Image::decode() {
         set_status(MediaStatus::EXPIRED);
     }
     
-    set_status(MediaStatus::READY);
+    // Serial.println("[IMAGE] DEBUG: decode() completed for ID " + String(image_id) + 
+    //               ", final status: " + String(static_cast<int>(get_status())));
 }
 
 void Image::startDecode() {
+    // Serial.println("[IMAGE] DEBUG: startDecode() called for ID " + String(image_id));
     set_status(MediaStatus::DECODING);
     xTaskCreatePinnedToCore(decodeTask, "DecodeTask", 8192, this, 1, &decodeTaskHandle, 0);
-    // Serial.println("Task started");
+    // Serial.println("[IMAGE] DEBUG: Decode task created for ID " + String(image_id));
 }
 
 Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, uint8_t num_chunks, Rotation rot)
@@ -283,8 +295,6 @@ Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t t
     , chunk_received_mask(nullptr)
     , transfer_start_time(0)
     , chunk_timeout_ms(500 * num_chunks) {
-    
-    Serial.println("[IMAGE] Constructor: img_id " + String(img_id) + ", expected chunks: " + String(num_chunks));
     
     // Allocate chunk tracking mask (1 byte can track up to 8 chunks, extend as needed)
     size_t mask_size = (num_chunks + 7) / 8; // Round up to nearest byte
@@ -408,13 +418,13 @@ void Image::add_chunk(const uint8_t* chunk, size_t chunk_size) {
     size_t received = received_len();
     
     // Debug: Track chunk reception for each image
-    Serial.println("[CHUNK] Image " + String(image_id) + ": chunk " + String(chunks_received) + 
-                   " (" + String(chunk_size) + " bytes) - Total: " + String(received) + 
-                   "/" + String(total_size) + " (" + String((received * 100) / total_size) + "%)");
+    // Serial.println("[CHUNK] Image " + String(image_id) + ": chunk " + String(chunks_received) + 
+    //                " (" + String(chunk_size) + " bytes) - Total: " + String(received) + 
+    //                "/" + String(total_size) + " (" + String((received * 100) / total_size) + "%)");
 
     if (received == total_size) {
-        Serial.println("[IMAGE] Image " + String(image_id) + " complete: " + String(chunks_received) + 
-                       " chunks, " + String(total_size) + " bytes total");
+        // Serial.println("[IMAGE] Image " + String(image_id) + " complete: " + String(chunks_received) + 
+        //                " chunks, " + String(total_size) + " bytes total");
         
         if (image_format == ImageFormat::JPEG) {
             startDecode();
@@ -522,14 +532,14 @@ void Image::add_chunk_with_id(const uint8_t* chunk, size_t chunk_size, uint8_t c
     size_t received = received_len();
     
     // Debug: Track chunk reception for each image
-    Serial.println("[CHUNK] Image " + String(image_id) + ": chunk " + String(chunk_id) + 
-                   " (" + String(chunk_size) + " bytes) - Total: " + String(received) + 
-                   "/" + String(total_size) + " (" + String((received * 100) / total_size) + "%)");
+    // Serial.println("[CHUNK] Image " + String(image_id) + ": chunk " + String(chunk_id) + 
+    //                " (" + String(chunk_size) + " bytes) - Total: " + String(received) + 
+    //                "/" + String(total_size) + " (" + String((received * 100) / total_size) + "%)");
 
     // Check if all chunks received or if we have complete data
     if (all_chunks_received() || received == total_size) {
-        Serial.println("[IMAGE] Image " + String(image_id) + " complete: " + String(chunks_received) + 
-                       " chunks, " + String(total_size) + " bytes total");
+        // Serial.println("[IMAGE] Image " + String(image_id) + " complete: " + String(chunks_received) + 
+        //                " chunks, " + String(total_size) + " bytes total");
         
         if (image_format == ImageFormat::JPEG) {
             startDecode();
