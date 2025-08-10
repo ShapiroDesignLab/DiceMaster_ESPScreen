@@ -282,7 +282,7 @@ Image::Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t t
     , expected_chunks(num_chunks)
     , chunk_received_mask(nullptr)
     , transfer_start_time(0)
-    , chunk_timeout_ms(100 * num_chunks) {
+    , chunk_timeout_ms(500 * num_chunks) {
     
     Serial.println("[IMAGE] Constructor: img_id " + String(img_id) + ", expected chunks: " + String(num_chunks));
     
