@@ -6,7 +6,8 @@
 using namespace dice;
 
 // Global variable definitions
-uint8_t SCREEN_ID = 2;  // Define the screen ID variable
+uint8_t SCREEN_ID = 6;  // Define the screen ID variable
+Rotation DEFAULT_ROTATION = Rotation::ROT_0;
 
 Screen* screen;
 SPIDriver* spid;
@@ -31,7 +32,7 @@ void show_loading_dots() {
 		}
 		
 		// Create and display loading dots
-		auto* loading_group = new TextGroup(0, DICE_BLACK, DICE_WHITE);
+		auto* loading_group = new TextGroup(0, DICE_BLACK, DICE_WHITE, DEFAULT_ROTATION);
 		Text* loading_text = new Text("" + dots_text, 0, FontID::TF, 50, 120);
 		
 		loading_group->add_member(loading_text);
@@ -41,7 +42,7 @@ void show_loading_dots() {
 		if (!enqueue_success) {
 			delete loading_group; // This will also delete the text member
 		}
-		
+		 
 		// Cycle dots count: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> back to 1
 		dots_count++;
 		if (dots_count > 6) {
@@ -69,7 +70,7 @@ void setup(void){
 	delay(100);
 	
 	// Now that both screen and SPI are fully initialized, display the startup logo
-	screen->draw_startup_logo();
+	screen->draw_startup_logo(DEFAULT_ROTATION);
 	screen->update(); // Display the logo immediately
 	
 	Serial.println("=== DiceMaster System Ready ===");

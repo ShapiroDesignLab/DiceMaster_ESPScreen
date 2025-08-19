@@ -227,6 +227,20 @@ void Screen::set_display_rotation(Rotation rotation) {
     // For now, we'll handle rotation through coordinate transformation
 }
 
+// Helper function to map text rotation - swaps 90° and 270° for text display
+Rotation Screen::map_text_rotation(Rotation text_rotation) {
+    switch (text_rotation) {
+        case Rotation::ROT_90:
+            return Rotation::ROT_270;  // Text ROT_90 maps to GFX ROT_270
+        case Rotation::ROT_270:
+            return Rotation::ROT_90;   // Text ROT_270 maps to GFX ROT_90
+        case Rotation::ROT_0:
+        case Rotation::ROT_180:
+        default:
+            return text_rotation;      // No change for 0° and 180°
+    }
+}
+
 // Optimized rotation setter that caches the current state
 void Screen::set_gfx_rotation_cached(Rotation rotation) {
     // Only call setRotation if the rotation has actually changed
@@ -302,8 +316,11 @@ void Screen::draw_text(MediaContainer* txt, Rotation rotation, uint16_t text_col
     uint16_t individual_color = txt->get_font_color();
     gfx->setTextColor(individual_color);
     
+    // Map text rotation to GFX rotation - swaps 90° and 270° for text display
+    Rotation gfx_rotation = map_text_rotation(rotation);
+    
     // Apply display rotation using cached setter - Arduino GFX handles coordinate transformation automatically
-    set_gfx_rotation_cached(rotation);
+    set_gfx_rotation_cached(gfx_rotation);
     
     // Use original coordinates - Arduino GFX will transform them based on rotation
     gfx->setCursor(x, y);
@@ -550,15 +567,15 @@ int Screen::num_queued() {
     return count;
 }
 
-void Screen::draw_startup_logo() {
+void Screen::draw_startup_logo(Rotation rot) {
     Serial.println("[SCREEN] Drawing startup logo...");
     try {
-      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ480, logo_SIZE, 500, 1, Rotation::ROT_0);
+      MediaContainer* med = new Image(0, ImageFormat::JPEG, ImageResolution::SQ480, logo_SIZE, 500, 1, rot);
       int input_time = millis();
       med->add_chunk(logo, logo_SIZE);
       while (med->get_status() != MediaStatus::READY) {
         // Serial.println("[SCREEN] DEBUG: Waiting for startup logo to be ready...");
-        delay(5);
+        delay(10);
       }
       Serial.println("[SCREEN] Startup logo decoded successfully, enqueueing...");
       enqueue(med);

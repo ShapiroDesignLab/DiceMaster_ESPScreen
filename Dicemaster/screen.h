@@ -51,6 +51,7 @@ private:
     void transform_coordinates(uint16_t& x, uint16_t& y, Rotation rotation);
     void set_display_rotation(Rotation rotation);
     void set_gfx_rotation_cached(Rotation rotation);  // Cached rotation setter
+    Rotation map_text_rotation(Rotation text_rotation);  // Maps text rotation (swaps 90° and 270°)
     
     // Simplified queue processing - no need for internal transfer
     // void process_incoming_media();  // No longer needed
@@ -70,7 +71,7 @@ public:
     int num_queued();
 
     // Demo functions
-    void draw_startup_logo();
+    void draw_startup_logo(Rotation rot);
 };
 
 // Demo Functions
