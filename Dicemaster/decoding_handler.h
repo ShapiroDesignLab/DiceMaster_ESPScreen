@@ -459,8 +459,7 @@ inline MediaContainer* DecodingHandler::decode_message(const DProtocol::Message&
             auto* p = &msg.payload.u.videoStreamEnd;
             auto it = _video_streams.find(p->stream_id);
             if (it != _video_streams.end()) {
-                it->second->finalize_frame(0, 0);
-                it->second->end_stream();
+                it->second->flush(screen_ref);  // drain screen queue before freeing pool (flush-before-destroy contract)
                 delete it->second;
                 _video_streams.erase(it);
             }
