@@ -58,3 +58,6 @@ dkms.conf
 
 CLAUDE.md
 .claude/
+
+# Git worktrees
+.worktrees/
