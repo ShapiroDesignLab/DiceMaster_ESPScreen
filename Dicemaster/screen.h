@@ -69,6 +69,7 @@ public:
     bool down_button_pressed();
     bool up_button_pressed();
     int num_queued();
+    void flush_video_stream(uint8_t stream_id);
 
     // Demo functions
     void draw_startup_logo(Rotation rot);

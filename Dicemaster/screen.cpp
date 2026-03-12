@@ -394,6 +394,11 @@ void Screen::display_next() {
             // Serial.println("[SCREEN] DEBUG: Calling draw_text()");
             draw_text(current_disp);
             break;
+        case MediaType::VIDEO: {
+            VideoFrame* frame = static_cast<VideoFrame*>(current_disp);
+            draw_bmp565_rotated(frame->get_img(), frame->get_rotation());
+            break;
+        }
         default:
             Serial.println("[SCREEN] ERROR: Unsupported Media Type Encountered: " + String(static_cast<int>(current_disp->get_media_type())));
             break;
@@ -478,9 +483,10 @@ bool Screen::enqueue(MediaContainer* med) {
     // Serial.printf("[SCREEN] DEBUG: Attempting to enqueue media type: %d with image ID: %d\n", 
     //               (int)med->get_media_type(), med->get_image_id());
 
-    if (med->get_media_type() != MediaType::IMAGE && 
-        med->get_media_type() != MediaType::TEXTGROUP && 
-        med->get_media_type() != MediaType::TEXT) {
+    if (med->get_media_type() != MediaType::IMAGE &&
+        med->get_media_type() != MediaType::TEXTGROUP &&
+        med->get_media_type() != MediaType::TEXT &&
+        med->get_media_type() != MediaType::VIDEO) {
         Serial.println("[SCREEN] ERROR: Invalid media type: " + String(static_cast<int>(med->get_media_type())));
         return false;
     }
@@ -586,6 +592,32 @@ void Screen::draw_startup_logo(Rotation rot) {
       MediaContainer* err = print_error("Startup Logo Decoding Failed");
       enqueue(err);
     }
+}
+
+void Screen::flush_video_stream(uint8_t stream_id) {
+    if (!media_queue || !queue_mutex) return;
+
+    std::vector<MediaContainer*> keep;
+    MediaContainer* item = nullptr;
+
+    if (xSemaphoreTake(queue_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        Serial.println("[SCREEN] ERROR: flush_video_stream() - failed to acquire mutex");
+        return;
+    }
+
+    while (xQueueReceive(media_queue, &item, 0) == pdTRUE) {
+        if (item->get_media_type() == MediaType::VIDEO &&
+            item->get_stream_id() == stream_id) {
+            delete item;
+        } else {
+            keep.push_back(item);
+        }
+    }
+    for (auto* k : keep) {
+        xQueueSend(media_queue, &k, 0);
+    }
+
+    xSemaphoreGive(queue_mutex);
 }
 
 // }
