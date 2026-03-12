@@ -588,6 +588,97 @@ inline ErrorCode decode(const uint8_t* buffer, size_t bufferSize, Message& msg)
     }
 }
 
+// -----------------------------------------------------------------------
+//  VIDEO STREAM PAYLOAD STRUCTS  (Messages 0x10 – 0x15)
+// -----------------------------------------------------------------------
+
+// MESSAGE 0x10 — VIDEO_STREAM_INIT
+// Sent once before a stream begins. config_bytes follow immediately after the struct.
+struct VideoStreamInitPayload {
+    uint8_t  stream_id;
+    uint8_t  codec;        // 0 = H.264 Baseline
+    uint16_t width;
+    uint16_t height;
+    uint8_t  fps;
+    uint8_t  rotation;     // Rotation enum value
+    uint8_t  gop_size;
+    uint16_t config_len;   // byte length of codec config (SPS/PPS) that follows
+} __attribute__((packed));
+
+// MESSAGE 0x11 — VIDEO_FRAME_START
+// Sent at the start of every frame (may include the first chunk inline).
+struct VideoFrameStartPayload {
+    uint8_t  stream_id;
+    uint8_t  frame_type;   // 0 = I-frame, 1 = P-frame, 2 = B-frame
+    uint32_t pts;          // presentation timestamp (ms)
+    uint32_t total_size;   // total compressed frame size in bytes
+    uint8_t  num_chunks;   // total number of chunks for this frame
+} __attribute__((packed));
+
+// MESSAGE 0x12 — VIDEO_FRAME_CHUNK
+// Subsequent chunks of a frame after the first.
+struct VideoFrameChunkPayload {
+    uint8_t  stream_id;
+    uint8_t  chunk_index;
+    uint16_t chunk_size;
+    // chunk_size bytes of compressed data follow immediately
+} __attribute__((packed));
+
+// MESSAGE 0x13 — VIDEO_STREAM_END
+struct VideoStreamEndPayload {
+    uint8_t stream_id;
+    uint8_t reason;  // 0 = normal end
+} __attribute__((packed));
+
+// MESSAGE 0x14 — VIDEO_FLUSH
+// Instructs decoder to immediately flush / abort the stream.
+struct VideoFlushPayload {
+    uint8_t stream_id;
+    uint8_t reason;  // 0 = clean flush, 1 = error recovery
+} __attribute__((packed));
+
+// MESSAGE 0x15 — SET_ROTATION
+// Can target a specific stream (stream_id) or all streams (stream_id = 0xFF).
+struct SetRotationPayload {
+    uint8_t target;     // 0 = screen global, 1 = specific stream
+    uint8_t stream_id;  // relevant when target == 1
+    uint8_t rotation;   // Rotation enum value
+} __attribute__((packed));
+
+// -----------------------------------------------------------------------
+//  VIDEO STREAM DECODE HELPERS
+// -----------------------------------------------------------------------
+
+inline const VideoStreamInitPayload* decodeVideoStreamInit(const uint8_t* payload, size_t len) {
+    if (len < sizeof(VideoStreamInitPayload)) return nullptr;
+    return reinterpret_cast<const VideoStreamInitPayload*>(payload);
+}
+
+inline const VideoFrameStartPayload* decodeVideoFrameStart(const uint8_t* payload, size_t len) {
+    if (len < sizeof(VideoFrameStartPayload)) return nullptr;
+    return reinterpret_cast<const VideoFrameStartPayload*>(payload);
+}
+
+inline const VideoFrameChunkPayload* decodeVideoFrameChunk(const uint8_t* payload, size_t len) {
+    if (len < sizeof(VideoFrameChunkPayload)) return nullptr;
+    return reinterpret_cast<const VideoFrameChunkPayload*>(payload);
+}
+
+inline const VideoStreamEndPayload* decodeVideoStreamEnd(const uint8_t* payload, size_t len) {
+    if (len < sizeof(VideoStreamEndPayload)) return nullptr;
+    return reinterpret_cast<const VideoStreamEndPayload*>(payload);
+}
+
+inline const VideoFlushPayload* decodeVideoFlush(const uint8_t* payload, size_t len) {
+    if (len < sizeof(VideoFlushPayload)) return nullptr;
+    return reinterpret_cast<const VideoFlushPayload*>(payload);
+}
+
+inline const SetRotationPayload* decodeSetRotation(const uint8_t* payload, size_t len) {
+    if (len < sizeof(SetRotationPayload)) return nullptr;
+    return reinterpret_cast<const SetRotationPayload*>(payload);
+}
+
 } // namespace DProtocol
 
 // Export the namespace for global use
