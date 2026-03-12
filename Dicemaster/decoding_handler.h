@@ -40,6 +40,9 @@ private:
     std::map<uint8_t, uint8_t> received_chunks; // Track received chunks per image
     std::map<uint8_t, unsigned long> transfer_start_time; // Track when transfer started
     std::map<uint8_t, VideoStream*> _video_streams; // Maps stream_id -> VideoStream*
+    std::map<uint8_t, uint8_t> _video_expected_chunks; // num_chunks expected for current frame per stream
+    std::map<uint8_t, uint8_t> _video_received_chunks; // chunks received so far for current frame
+    std::map<uint8_t, uint8_t> _video_frame_type;      // frame_type of current frame per stream
     volatile bool processing_enabled;  // Enable/disable processing
     bool initialized;  // Track if queues/mutex are created
     
@@ -441,16 +444,32 @@ inline MediaContainer* DecodingHandler::decode_message(const DProtocol::Message&
 
         case DProtocol::TAG_VIDEO_FRAME_START: {
             auto* p = &msg.payload.u.videoFrameStart;
-            // Frame metadata noted; chunk accumulation handled by TAG_VIDEO_FRAME_CHUNK
-            (void)p;
+            auto it = _video_streams.find(p->stream_id);
+            if (it != _video_streams.end()) {
+                _video_expected_chunks[p->stream_id] = p->num_chunks;
+                _video_received_chunks[p->stream_id] = 0;
+                _video_frame_type[p->stream_id]      = p->frame_type;
+            }
             break;
         }
 
         case DProtocol::TAG_VIDEO_FRAME_CHUNK: {
             auto* p = &msg.payload.u.videoFrameChunk;
+            if (p->chunk_data == nullptr) break;
             auto it = _video_streams.find(p->stream_id);
             if (it != _video_streams.end()) {
                 it->second->push_chunk(p->chunk_data, p->chunk_size);
+                _video_received_chunks[p->stream_id]++;
+                uint8_t expected = _video_expected_chunks.count(p->stream_id)
+                                   ? _video_expected_chunks[p->stream_id] : 0;
+                if (expected > 0 && _video_received_chunks[p->stream_id] >= expected) {
+                    uint8_t ftype = _video_frame_type.count(p->stream_id)
+                                    ? _video_frame_type[p->stream_id] : 0;
+                    it->second->finalize_frame(ftype, 0);
+                    _video_expected_chunks.erase(p->stream_id);
+                    _video_received_chunks.erase(p->stream_id);
+                    _video_frame_type.erase(p->stream_id);
+                }
             }
             break;
         }

@@ -608,6 +608,16 @@ void Screen::flush_video_stream(uint8_t stream_id) {
         return;
     }
 
+    // Also clear current_disp if it is a VideoFrame from this stream.
+    // current_disp holds the frame being rendered; it must be released before
+    // VideoStream frees its pool, otherwise the release_cb fires on freed memory.
+    if (current_disp &&
+        current_disp->get_media_type() == MediaType::VIDEO &&
+        current_disp->get_stream_id() == stream_id) {
+        delete current_disp;
+        current_disp = nullptr;
+    }
+
     while (xQueueReceive(media_queue, &item, 0) == pdTRUE) {
         if (item->get_media_type() == MediaType::VIDEO &&
             item->get_stream_id() == stream_id) {

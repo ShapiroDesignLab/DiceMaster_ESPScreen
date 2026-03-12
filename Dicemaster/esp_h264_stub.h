@@ -9,11 +9,20 @@
 extern "C" {
 #endif
 
+#ifndef esp_h264_dec_handle_t
 typedef void* esp_h264_dec_handle_t;
-typedef int   esp_err_t;
+#endif
 
+#ifndef esp_err_t
+typedef int   esp_err_t;
+#endif
+
+#ifndef ESP_OK
 #define ESP_OK   0
+#endif
+#ifndef ESP_FAIL
 #define ESP_FAIL (-1)
+#endif
 
 typedef struct {
     uint16_t width;
