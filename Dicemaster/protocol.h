@@ -167,7 +167,7 @@ inline ErrorCode decodeHeader(const uint8_t* buf, size_t sz, MessageHeader& h)
     
     // Validate message type
     uint8_t msg_type = buf[1];
-    if(msg_type < 0x01 || msg_type > 0x0F) return ErrorCode::INVALID_MESSAGE_TYPE;
+    if(msg_type < 0x01 || msg_type > 0x15) return ErrorCode::INVALID_MESSAGE_TYPE;
     
     h.marker = buf[0];
     h.type   = static_cast<MessageType>(msg_type);

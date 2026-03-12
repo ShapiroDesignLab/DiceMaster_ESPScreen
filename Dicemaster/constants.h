@@ -30,6 +30,7 @@ enum class MediaType : uint8_t {
     TEXTGROUP = 1,
     IMAGE = 2,
     GIF = 5,
+    VIDEO = 6,   // decoded video frame (VideoFrame MediaContainer)
     CTRL = 255
 };
 
@@ -98,7 +99,13 @@ enum class MessageType : uint8_t {
     PING_REQUEST = 0x0C,
     PING_RESPONSE = 0x0D,
     ACK = 0x0E,
-    ERROR = 0x0F
+    ERROR = 0x0F,
+    VIDEO_STREAM_INIT = 0x10,  // Configure H.264 stream; delivers SPS+PPS NAL units
+    VIDEO_FRAME_START = 0x11,  // Start of one H.264 access unit, embedded chunk 0 included
+    VIDEO_FRAME_CHUNK = 0x12,  // Continuation chunk for the current frame
+    VIDEO_STREAM_END = 0x13,   // Graceful end-of-stream
+    VIDEO_FLUSH = 0x14,        // Emergency abort: drain pipeline immediately, free all state
+    SET_ROTATION = 0x15        // Change display rotation; takes effect on next decoded frame
 };
 
 // Enums for Error Codes (compatible with protocol.h)
