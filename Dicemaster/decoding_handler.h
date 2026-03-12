@@ -12,9 +12,10 @@
 #include <esp_heap_caps.h>
 
 #include "media.h"
-#include "protocol.h"  
+#include "protocol.h"
 #include "constants.h"
 #include "ESP32DMASPIStream.h"
+#include "video_stream.h"
 // Forward declare SPISlaveBuffer from the actual namespace
 using SPIBuffer = ESP32DMASPI::SPISlaveBuffer;
 
@@ -38,6 +39,7 @@ private:
     std::map<uint8_t, uint8_t> expected_chunks; // Track expected number of chunks per image
     std::map<uint8_t, uint8_t> received_chunks; // Track received chunks per image
     std::map<uint8_t, unsigned long> transfer_start_time; // Track when transfer started
+    std::map<uint8_t, VideoStream*> _video_streams; // Maps stream_id -> VideoStream*
     volatile bool processing_enabled;  // Enable/disable processing
     bool initialized;  // Track if queues/mutex are created
     
@@ -421,7 +423,74 @@ inline MediaContainer* DecodingHandler::decode_message(const DProtocol::Message&
             // Serial.println("[DECODE] DEBUG: Processing BACKLIGHT_OFF");
             // Handle backlight control (no media container needed)
             break;
-            
+
+        case DProtocol::TAG_VIDEO_STREAM_INIT: {
+            auto* p = &msg.payload.u.videoStreamInit;
+            auto it = _video_streams.find(p->stream_id);
+            if (it != _video_streams.end()) {
+                it->second->flush(screen_ref);
+                delete it->second;
+                _video_streams.erase(it);
+            }
+            auto* vs = new VideoStream(p->stream_id, screen_ref, p->fps);
+            vs->init(p->width, p->height, p->fps, static_cast<Rotation>(p->rotation),
+                     p->config_data, p->config_len);
+            _video_streams[p->stream_id] = vs;
+            break;
+        }
+
+        case DProtocol::TAG_VIDEO_FRAME_START: {
+            auto* p = &msg.payload.u.videoFrameStart;
+            // Frame metadata noted; chunk accumulation handled by TAG_VIDEO_FRAME_CHUNK
+            (void)p;
+            break;
+        }
+
+        case DProtocol::TAG_VIDEO_FRAME_CHUNK: {
+            auto* p = &msg.payload.u.videoFrameChunk;
+            auto it = _video_streams.find(p->stream_id);
+            if (it != _video_streams.end()) {
+                it->second->push_chunk(p->chunk_data, p->chunk_size);
+            }
+            break;
+        }
+
+        case DProtocol::TAG_VIDEO_STREAM_END: {
+            auto* p = &msg.payload.u.videoStreamEnd;
+            auto it = _video_streams.find(p->stream_id);
+            if (it != _video_streams.end()) {
+                it->second->finalize_frame(0, 0);
+                it->second->end_stream();
+                delete it->second;
+                _video_streams.erase(it);
+            }
+            break;
+        }
+
+        case DProtocol::TAG_VIDEO_FLUSH: {
+            auto* p = &msg.payload.u.videoFlush;
+            auto it = _video_streams.find(p->stream_id);
+            if (it != _video_streams.end()) {
+                it->second->flush(screen_ref);
+            }
+            break;
+        }
+
+        case DProtocol::TAG_SET_ROTATION: {
+            auto* p = &msg.payload.u.setRotation;
+            if (p->target == 0) {
+                for (auto& kv : _video_streams) {
+                    kv.second->set_rotation(static_cast<Rotation>(p->rotation));
+                }
+            } else {
+                auto it = _video_streams.find(p->stream_id);
+                if (it != _video_streams.end()) {
+                    it->second->set_rotation(static_cast<Rotation>(p->rotation));
+                }
+            }
+            break;
+        }
+
         default:
             Serial.println("[DECODE] ERROR: Unknown tag: " + String(static_cast<uint8_t>(msg.payload.tag)));
             break;
