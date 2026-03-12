@@ -16,7 +16,8 @@ namespace dice {
 static constexpr int   VIDEO_POOL_SIZE    = 4;
 static constexpr int   VIDEO_FRAME_WIDTH  = 480;
 static constexpr int   VIDEO_FRAME_HEIGHT = 480;
-static constexpr size_t VIDEO_FRAME_BYTES = VIDEO_FRAME_WIDTH * VIDEO_FRAME_HEIGHT * 2;
+static constexpr size_t VIDEO_FRAME_BYTES     = VIDEO_FRAME_WIDTH * VIDEO_FRAME_HEIGHT * 2;
+static constexpr size_t MAX_FRAME_BUF_BYTES   = 512 * 1024;  // 512 KB cap on compressed frame data
 
 class VideoStream {
 public:
@@ -54,8 +55,9 @@ private:
     std::atomic<Rotation> _pending_rotation;
 
     // Frame buffer pool
-    uint16_t* _pool_slots[VIDEO_POOL_SIZE] = {};
-    bool      _pool_used[VIDEO_POOL_SIZE]  = {};
+    uint16_t*    _pool_slots[VIDEO_POOL_SIZE] = {};
+    bool         _pool_used[VIDEO_POOL_SIZE]  = {};
+    portMUX_TYPE _pool_mux = portMUX_INITIALIZER_UNLOCKED;
 
     // Accumulation buffer for the current frame's compressed data
     std::vector<uint8_t> _frame_buf;

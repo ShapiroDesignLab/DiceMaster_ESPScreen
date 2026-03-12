@@ -14,6 +14,9 @@ VideoStream::VideoStream(uint8_t stream_id, Screen* screen, uint8_t fps)
         _pool_slots[i] = static_cast<uint16_t*>(
             heap_caps_malloc(VIDEO_FRAME_BYTES, MALLOC_CAP_SPIRAM));
         _pool_used[i] = false;
+        if (!_pool_slots[i]) {
+            Serial.printf("[VIDEO] Stream %d: PSRAM alloc failed for pool slot %d\n", stream_id, i);
+        }
     }
 }
 
@@ -38,6 +41,12 @@ bool VideoStream::init(uint16_t width, uint16_t height, uint8_t fps,
 
 bool VideoStream::push_chunk(const uint8_t* data, size_t len) {
     if (!_active) return false;
+    if (_frame_buf.size() + len > MAX_FRAME_BUF_BYTES) {
+        Serial.printf("[VIDEO] Stream %d: frame buf overflow (%u bytes), ending stream\n",
+                      _stream_id, (unsigned)(_frame_buf.size() + len));
+        end_stream();
+        return false;
+    }
     _frame_buf.insert(_frame_buf.end(), data, data + len);
     return true;
 }
@@ -60,6 +69,8 @@ bool VideoStream::finalize_frame(uint8_t /*frame_type*/, uint32_t /*pts*/) {
     }
 
     Rotation rot = _pending_rotation.load();
+    // NOTE: release_cb captures 'this'. VideoStream must outlive all VideoFrame objects
+    // it creates. Always call flush() before destroying a VideoStream.
     auto release_cb = [this](uint16_t* ptr) { release_slot(ptr); };
     auto* frame = new VideoFrame(_stream_id, slot, _frame_duration_ms, rot, release_cb);
 
@@ -86,22 +97,28 @@ void VideoStream::flush(Screen* screen) {
 }
 
 uint16_t* VideoStream::acquire_slot() {
+    uint16_t* result = nullptr;
+    taskENTER_CRITICAL(&_pool_mux);
     for (int i = 0; i < VIDEO_POOL_SIZE; ++i) {
         if (!_pool_used[i] && _pool_slots[i]) {
             _pool_used[i] = true;
-            return _pool_slots[i];
+            result = _pool_slots[i];
+            break;
         }
     }
-    return nullptr;
+    taskEXIT_CRITICAL(&_pool_mux);
+    return result;
 }
 
 void VideoStream::release_slot(uint16_t* ptr) {
+    taskENTER_CRITICAL(&_pool_mux);
     for (int i = 0; i < VIDEO_POOL_SIZE; ++i) {
         if (_pool_slots[i] == ptr) {
             _pool_used[i] = false;
-            return;
+            break;
         }
     }
+    taskEXIT_CRITICAL(&_pool_mux);
 }
 
 void VideoStream::reset_decoder() {
