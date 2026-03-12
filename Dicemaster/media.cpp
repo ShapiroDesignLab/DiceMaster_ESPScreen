@@ -570,4 +570,54 @@ MediaContainer* print_error(String input) {
     return group;
 }
 
+
+// ============================================================
+// VideoFrame implementation
+// ============================================================
+
+VideoFrame::VideoFrame(uint8_t stream_id, uint16_t* rgb565_data,
+                       size_t display_duration_ms, Rotation rotation,
+                       std::function<void(uint16_t*)> slot_release_cb)
+    : MediaContainer(MediaType::VIDEO, display_duration_ms),
+      _stream_id(stream_id),
+      _rgb565(rgb565_data),
+      _rotation(rotation),
+      _slot_release_cb(std::move(slot_release_cb))
+{
+    set_status(MediaStatus::READY);
+}
+
+VideoFrame::~VideoFrame() {
+    if (_slot_release_cb && _rgb565) {
+        _slot_release_cb(_rgb565);
+    }
+}
+
+void VideoFrame::yuv420_to_rgb565(const uint8_t* y_plane, const uint8_t* u_plane,
+                                  const uint8_t* v_plane, uint16_t* dst,
+                                  int width, int height) {
+    // Convert I420 YUV planar to RGB565 packed.
+    // U and V planes are half-resolution (width/2 x height/2).
+    for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+            int y = y_plane[row * width + col];
+            int u = u_plane[(row / 2) * (width / 2) + (col / 2)] - 128;
+            int v = v_plane[(row / 2) * (width / 2) + (col / 2)] - 128;
+
+            // BT.601 coefficients
+            int r = y + (v * 1436 >> 10);
+            int g = y - (u * 352 >> 10) - (v * 731 >> 10);
+            int b = y + (u * 1814 >> 10);
+
+            // Clamp
+            r = r < 0 ? 0 : (r > 255 ? 255 : r);
+            g = g < 0 ? 0 : (g > 255 ? 255 : g);
+            b = b < 0 ? 0 : (b > 255 ? 255 : b);
+
+            // Pack to RGB565
+            dst[row * width + col] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+        }
+    }
+}
+
 }   // namespace dice
