@@ -590,6 +590,7 @@ VideoFrame::VideoFrame(uint8_t stream_id, uint16_t* rgb565_data,
 VideoFrame::~VideoFrame() {
     if (_slot_release_cb && _rgb565) {
         _slot_release_cb(_rgb565);
+        _rgb565 = nullptr;
     }
 }
 
@@ -600,11 +601,12 @@ void VideoFrame::yuv420_to_rgb565(const uint8_t* y_plane, const uint8_t* u_plane
     // U and V planes are half-resolution (width/2 x height/2).
     for (int row = 0; row < height; ++row) {
         for (int col = 0; col < width; ++col) {
-            int y = y_plane[row * width + col];
+            // Subtract 16 for H.264 limited-range (studio-swing) luma: Y in [16, 235]
+            int y = y_plane[row * width + col] - 16;
             int u = u_plane[(row / 2) * (width / 2) + (col / 2)] - 128;
             int v = v_plane[(row / 2) * (width / 2) + (col / 2)] - 128;
 
-            // BT.601 coefficients
+            // BT.601 limited-range coefficients
             int r = y + (v * 1436 >> 10);
             int g = y - (u * 352 >> 10) - (v * 731 >> 10);
             int b = y + (u * 1814 >> 10);
