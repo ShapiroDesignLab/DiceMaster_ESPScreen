@@ -49,6 +49,9 @@ bool Screen::is_next_ready() {
             Serial.println("[SCREEN] INFO: Deleting expired TextGroup - Status: " + String((int)front_media->get_status()));
         } else if (front_media->get_media_type() == MediaType::TEXT) {
             Serial.println("[SCREEN] INFO: Deleting expired Text - Status: " + String((int)front_media->get_status()));
+        } else if (front_media->get_media_type() == MediaType::VIDEO) {
+            Serial.println("[SCREEN] INFO: Deleting expired VideoFrame stream=" + String(front_media->get_stream_id()) +
+                           " - Status: " + String((int)front_media->get_status()));
         }
         delete front_media;
         front_media = nullptr;
@@ -614,7 +617,9 @@ void Screen::flush_video_stream(uint8_t stream_id) {
         }
     }
     for (auto* k : keep) {
-        xQueueSend(media_queue, &k, 0);
+        if (xQueueSend(media_queue, &k, 0) != pdTRUE) {
+            delete k;  // queue full — release pool slot and prevent leak
+        }
     }
 
     xSemaphoreGive(queue_mutex);
