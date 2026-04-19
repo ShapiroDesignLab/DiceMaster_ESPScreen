@@ -108,6 +108,10 @@ private:
     // JPEGDraw callback function to handle drawing decoded JPEG blocks
     static int JPEGDraw480(JPEGDRAW* pDraw);
     static int JPEGDraw240(JPEGDRAW* pDraw);
+
+    // Upscale a contiguous src_w × src_h RGB565 buffer to 2*src_w × 2*src_h using
+    // nearest-neighbour (each pixel becomes a 2×2 block). dst must be pre-allocated.
+    static void upscale_bmp565_2x(const uint16_t* src, uint16_t* dst, int src_w, int src_h);
     static void decodeTask(void* pvParameters) {
         Image* img = static_cast<Image*>(pvParameters);
         // Serial.println("[IMAGE-TASK] DEBUG: Decode task started for image ID " + String(img->get_image_id()));
@@ -226,6 +230,12 @@ public:
     static void yuv420_to_rgb565(const uint8_t* y_plane, const uint8_t* u_plane,
                                  const uint8_t* v_plane, uint16_t* dst,
                                  int width, int height);
+
+    // Combined I420 → RGB565 with 2× nearest-neighbour upscale.
+    // src_w × src_h input → 2*src_w × 2*src_h output; dst must be pre-allocated.
+    static void yuv420_to_rgb565_2x(const uint8_t* y_plane, const uint8_t* u_plane,
+                                    const uint8_t* v_plane, uint16_t* dst,
+                                    int src_w, int src_h);
 
 private:
     const uint8_t _stream_id;
