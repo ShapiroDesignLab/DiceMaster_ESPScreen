@@ -1139,8 +1139,9 @@ public:
             0xFF, frame480, 2000, Rotation::ROT_0,
             [](uint16_t* p) { heap_caps_free(p); });
         if (!screen->enqueue(vf)) {
+            delete vf;  // destructor calls release_cb, which frees frame480
             Serial.println("[VIDEO-TEST] FAIL: enqueue failed");
-            return;  // vf destructor already freed frame480 via release_cb
+            return;
         }
 
         // Drive display loop for 3 s to show the frame
