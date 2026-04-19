@@ -29,11 +29,23 @@ VideoStream::~VideoStream() {
 }
 
 bool VideoStream::init(uint16_t width, uint16_t height, uint8_t fps,
-                       Rotation rotation, const uint8_t* /*config*/, uint16_t /*config_len*/) {
+                       Rotation rotation, const uint8_t* config, uint16_t config_len) {
     _width  = width;
     _height = height;
     _frame_duration_ms = fps > 0 ? 1000u / fps : 33u;
     _pending_rotation.store(rotation);
+
+    // Create H.264 decoder and feed SPS/PPS (config) if present so it can
+    // pre-allocate reference frame buffers in PSRAM before the first I-frame.
+    reset_decoder();
+    _dec_handle = new EspH264Decoder();
+    if (!_dec_handle->init(config, config_len)) {
+        Serial.printf("[VIDEO] Stream %d: H264 decoder init failed\n", _stream_id);
+        delete _dec_handle;
+        _dec_handle = nullptr;
+        return false;
+    }
+
     _active = true;
     Serial.printf("[VIDEO] Stream %d init %dx%d @ %d fps\n", _stream_id, width, height, fps);
     return true;
@@ -61,11 +73,22 @@ bool VideoStream::finalize_frame(uint8_t /*frame_type*/, uint32_t /*pts*/) {
         return false;
     }
 
-    // TODO: decode _frame_buf into slot via esp_h264_dec_process when real library available
-    // For now, fill with a solid colour as a placeholder
-    uint16_t colour = 0x07E0; // green in RGB565
-    for (size_t px = 0; px < VIDEO_FRAME_WIDTH * (size_t)VIDEO_FRAME_HEIGHT; ++px) {
-        slot[px] = colour;
+    if (!_dec_handle || !_dec_handle->is_initialized()) {
+        Serial.printf("[VIDEO] Stream %d: no decoder, dropping frame\n", _stream_id);
+        release_slot(slot);
+        _frame_buf.clear();
+        return false;
+    }
+
+    bool decoded = _dec_handle->decode_frame(
+        _frame_buf.data(), _frame_buf.size(),
+        slot, _width, _height);
+
+    if (!decoded) {
+        Serial.printf("[VIDEO] Stream %d: decode failed, dropping frame\n", _stream_id);
+        release_slot(slot);
+        _frame_buf.clear();
+        return false;
     }
 
     Rotation rot = _pending_rotation.load();
@@ -123,7 +146,7 @@ void VideoStream::release_slot(uint16_t* ptr) {
 
 void VideoStream::reset_decoder() {
     if (_dec_handle) {
-        esp_h264_dec_close(_dec_handle);
+        delete _dec_handle;
         _dec_handle = nullptr;
     }
 }

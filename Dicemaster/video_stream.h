@@ -4,7 +4,7 @@
 #include <atomic>
 #include <functional>
 #include <vector>
-#include "esp_h264_stub.h"
+#include "esp_h264_decoder.h"
 #include "constants.h"
 #include "media.h"
 #include "screen.h"
@@ -45,8 +45,7 @@ private:
     Screen*   _screen;
     bool      _active = false;
 
-    // Decoder state (stub — replace with real esp_h264 handles)
-    esp_h264_dec_handle_t _dec_handle = nullptr;
+    EspH264Decoder* _dec_handle = nullptr;
     uint16_t _width  = 480;
     uint16_t _height = 480;
     uint32_t _frame_duration_ms = 33;  // 1000 / fps
