@@ -88,7 +88,7 @@ def main():
         f"static constexpr uint8_t  TEST_VIDEO_FPS    = {FPS};",
         f"static constexpr size_t   TEST_VIDEO_SIZE   = {len(data)};",
         "",
-        f"static const uint8_t TEST_VIDEO_DATA[{len(data)}] PROGMEM = {{",
+        f"static const uint8_t TEST_VIDEO_DATA[{len(data)}] = {{",
     ]
 
     # Emit bytes in rows of 16
