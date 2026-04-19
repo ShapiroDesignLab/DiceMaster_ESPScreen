@@ -546,7 +546,6 @@ bool Screen::enqueue(MediaContainer* med) {
         if (xQueueSend(media_queue, &med, 0) != pdTRUE) {
             Serial.println("[SCREEN] WARNING: Media queue full, dropping media item");
             xSemaphoreGive(queue_mutex);
-            delete med;  // Clean up if we can't queue it
             return false;
         }
 
@@ -568,7 +567,6 @@ bool Screen::enqueue(MediaContainer* med) {
         return true;
     } else {
         Serial.println("[SCREEN] ERROR: Failed to acquire queue mutex");
-        delete med;
         return false;
     }
 }

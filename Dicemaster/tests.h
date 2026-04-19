@@ -1110,17 +1110,30 @@ public:
             return;
         }
 
+        // Copy compressed stream to PSRAM — tinyh264 needs a non-flash buffer.
+        uint8_t* video_psram = static_cast<uint8_t*>(
+            heap_caps_malloc(TEST_VIDEO_SIZE, MALLOC_CAP_SPIRAM));
+        if (!video_psram) {
+            Serial.println("[VIDEO-TEST] FAIL: PSRAM alloc for video copy failed");
+            heap_caps_free(frame240);
+            heap_caps_free(frame480);
+            return;
+        }
+        memcpy(video_psram, TEST_VIDEO_DATA, TEST_VIDEO_SIZE);
+
         EspH264Decoder decoder;
         if (!decoder.init()) {
             Serial.println("[VIDEO-TEST] FAIL: decoder init failed");
+            heap_caps_free(video_psram);
             heap_caps_free(frame240);
             heap_caps_free(frame480);
             return;
         }
 
         bool got_frame = decoder.decode_frame(
-            TEST_VIDEO_DATA, TEST_VIDEO_SIZE,
+            video_psram, TEST_VIDEO_SIZE,
             frame240, TEST_VIDEO_WIDTH, TEST_VIDEO_HEIGHT);
+        heap_caps_free(video_psram);
 
         if (!got_frame) {
             Serial.println("[VIDEO-TEST] FAIL: decode_frame returned false");
