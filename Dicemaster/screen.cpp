@@ -408,62 +408,95 @@ void Screen::display_next() {
         }
         // Serial.println("[SCREEN] DEBUG: Triggering display for media type " + String(static_cast<int>(current_disp->get_media_type())));
         current_disp->trigger_display();
+        // Flush canvas to hardware display
+        esp_lcd_panel_draw_bitmap(_panel, 0, 0, 480, 480, gfx->getFramebuffer());
     }
 }
 
 Screen::Screen()
-    : expander(new Arduino_XCA9554SWSPI(PCA_TFT_RESET, PCA_TFT_CS, PCA_TFT_SCK, PCA_TFT_MOSI, &Wire, 0x3F))
-    , rgbpanel(new Arduino_ESP32RGBPanel(
-        TFT_DE, TFT_VSYNC, TFT_HSYNC, TFT_PCLK, TFT_R1, TFT_R2, TFT_R3, TFT_R4, TFT_R5, TFT_G0, TFT_G1, TFT_G2, TFT_G3,
-        TFT_G4, TFT_G5, TFT_B1, TFT_B2, TFT_B3, TFT_B4, TFT_B5, 1 /* hsync_polarity */, 50 /* hsync_front_porch */,
-        2 /* hsync_pulse_width */, 44 /* hsync_back_porch */, 1 /* vsync_polarity */, 16 /* vsync_front_porch */,
-        2 /* vsync_pulse_width */, 18 /* vsync_back_porch */
-        ))
-    , gfx(new Arduino_RGB_Display(
-        // 4.0" 480x480 rectangle bar display
-        480 /* width */, 480 /* height */, rgbpanel, 0 /* rotation */, true /* auto_flush */, expander,
-        GFX_NOT_DEFINED /* RST */, tl040wvs03_init_operations, sizeof(tl040wvs03_init_operations)))
+    : expander(new Arduino_XCA9554SWSPI(
+          PCA_TFT_RESET, PCA_TFT_CS, PCA_TFT_SCK, PCA_TFT_MOSI, &Wire, 0x3F))
+    , gfx(new Arduino_Canvas(480, 480, nullptr))
     , media_queue(nullptr)
-    , screen_buffer((uint16_t*) ps_malloc(gfx->width() * gfx->height() * sizeof(uint16_t)))
+    , screen_buffer((uint16_t*)ps_malloc(480 * 480 * sizeof(uint16_t)))
     , current_disp(nullptr)
     , queue_mutex(nullptr)
-    , current_gfx_rotation(Rotation::ROT_0) {  // Initialize rotation cache
-#ifdef GFX_EXTRA_PRE_INIT
-    GFX_EXTRA_PRE_INIT();
-#endif
-#ifdef GFX_BL
-    pinMode(GFX_BL, OUTPUT);
-    digitalWrite(GFX_BL, HIGH);
-#endif
+    , current_gfx_rotation(Rotation::ROT_0)
+{
+    // I2C for the XCA9554 I/O expander (backlight, buttons, ST7701S SPI init)
+    Wire.begin();
+    Wire.setClock(1000000);
+    expander->begin();
 
-    if (!gfx->begin()) Serial.println("gfx->begin() failed!");
-    Serial.println("GFX Initialized!");
+    // Send the ST7701S initialisation sequence through the XCA9554 SPI expander.
+    // batchOperation() interprets the same op-code bytecode that Arduino_RGB_Display used.
+    expander->batchOperation(tl040wvs03_init_operations, sizeof(tl040wvs03_init_operations));
+    Serial.println("ST7701S init sequence sent");
 
-    Wire.setClock(1000000);   // speed up I2C
+    // Configure the IDF 5.x RGB panel driver.
+    // data_gpio_nums ordering: B[0:4], G[0:5], R[0:4] — mirrors Arduino_ESP32RGBPanel default.
+    const esp_lcd_rgb_panel_config_t panel_cfg = {
+        .clk_src = LCD_CLK_SRC_DEFAULT,
+        .timings = {
+            .pclk_hz           = 16 * 1000 * 1000,
+            .h_res             = 480,
+            .v_res             = 480,
+            .hsync_pulse_width = 2,
+            .hsync_back_porch  = 44,
+            .hsync_front_porch = 50,
+            .vsync_pulse_width = 2,
+            .vsync_back_porch  = 18,
+            .vsync_front_porch = 16,
+            .flags = {
+                .hsync_idle_low = 1,
+                .vsync_idle_low = 1,
+            },
+        },
+        .data_width        = 16,
+        .psram_trans_align = 64,
+        .hsync_gpio_num    = TFT_HSYNC,
+        .vsync_gpio_num    = TFT_VSYNC,
+        .de_gpio_num       = TFT_DE,
+        .pclk_gpio_num     = TFT_PCLK,
+        .disp_gpio_num     = GPIO_NUM_NC,
+        .data_gpio_nums    = {
+            TFT_B1, TFT_B2, TFT_B3, TFT_B4, TFT_B5,         // data[0:4]  = B[0:4]
+            TFT_G0, TFT_G1, TFT_G2, TFT_G3, TFT_G4, TFT_G5, // data[5:10] = G[0:5]
+            TFT_R1, TFT_R2, TFT_R3, TFT_R4, TFT_R5,          // data[11:15] = R[0:4]
+        },
+        .flags = { .fb_in_psram = 1 },
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_rgb_panel(&panel_cfg, &_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(_panel));
+    Serial.println("esp_lcd RGB panel initialized");
 
+    // Initialise the software canvas (all existing draw calls target this).
+    gfx->begin();
     gfx->fillScreen(DICE_BLACK);
     gfx->setUTF8Print(true);
 
+    // Backlight on via XCA9554 expander
     expander->pinMode(PCA_TFT_BACKLIGHT, OUTPUT);
     expander->digitalWrite(PCA_TFT_BACKLIGHT, HIGH);
 
-    // Initialize thread-safe queues
+    // Push initial black frame to the hardware
+    esp_lcd_panel_draw_bitmap(_panel, 0, 0, 480, 480, gfx->getFramebuffer());
+
+    // Thread-safe media queue
     media_queue = xQueueCreate(SCREEN_MEDIA_QUEUE_SIZE, sizeof(MediaContainer*));
     if (!media_queue) {
-        Serial.println("[SCREEN] FATAL: Failed to create media queue in constructor");
-        while(1) delay(1000); // Halt on critical failure
+        Serial.println("[SCREEN] FATAL: Failed to create media queue");
+        while (1) delay(1000);
     }
-    
     queue_mutex = xSemaphoreCreateMutex();
     if (!queue_mutex) {
-        Serial.println("[SCREEN] FATAL: Failed to create queue mutex in constructor");
+        Serial.println("[SCREEN] FATAL: Failed to create queue mutex");
         vQueueDelete(media_queue);
         media_queue = nullptr;
-        while(1) delay(1000); // Halt on critical failure
+        while (1) delay(1000);
     }
-    
-    Serial.println("[SCREEN] Thread-safe queue initialized in constructor");
-
+    Serial.println("[SCREEN] Queue initialized");
     Serial.println("Screen Initialized!");
 }
 

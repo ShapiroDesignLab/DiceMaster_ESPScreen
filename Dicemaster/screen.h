@@ -8,6 +8,8 @@
 #include <freertos/semphr.h>
 
 #include <Arduino_GFX_Library.h>
+#include <esp_lcd_panel_rgb.h>
+#include <esp_lcd_panel_ops.h>
 #include <U8g2lib.h>
 #include "media.h"
 
@@ -19,8 +21,8 @@ constexpr size_t SCREEN_MEDIA_QUEUE_SIZE = 32;  // Buffer up to 32 media items
 class Screen {
 private:
     Arduino_XCA9554SWSPI* expander;
-    Arduino_ESP32RGBPanel* rgbpanel;
-    Arduino_RGB_Display* gfx;
+    esp_lcd_panel_handle_t _panel = nullptr;
+    Arduino_Canvas* gfx;
 
     // Single thread-safe queue for all media
     QueueHandle_t media_queue;
