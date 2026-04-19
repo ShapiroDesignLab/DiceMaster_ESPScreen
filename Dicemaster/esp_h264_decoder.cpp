@@ -66,20 +66,28 @@ bool EspH264Decoder::process_stream(const uint8_t* data, size_t len,
 
         esp_h264_err_t ret = esp_h264_dec_process(_handle, &in_frame, &out_frame);
 
-        if (in_frame.consume == 0) break;  // no progress — guard against infinite loop
-        in_frame.raw_data.buffer += in_frame.consume;
-        in_frame.raw_data.len    -= in_frame.consume;
-
+        // Check error before advancing — matches the official usage pattern in esp_h264_types.h.
         if (ret != ESP_H264_ERR_OK) {
             Serial.printf("[H264] esp_h264_dec_process error: %d\n", (int)ret);
             return false;
         }
 
-        if (out_frame.outbuf != nullptr && rgb565_out) {
+        if (in_frame.consume == 0) break;  // no progress — guard against infinite loop
+        if (in_frame.consume > in_frame.raw_data.len) {
+            Serial.printf("[H264] consume (%lu) > remaining (%lu)\n",
+                          (unsigned long)in_frame.consume,
+                          (unsigned long)in_frame.raw_data.len);
+            return false;
+        }
+        in_frame.raw_data.buffer += in_frame.consume;
+        in_frame.raw_data.len    -= in_frame.consume;
+
+        // outbuf is reused on the next call to esp_h264_dec_process — consume it immediately.
+        if (out_frame.outbuf != nullptr && out_frame.out_size > 0 && rgb565_out) {
             // out_frame.outbuf is I420 planar: Y(w*h), U(w/2*h/2), V(w/2*h/2)
             const uint8_t* y = out_frame.outbuf;
-            const uint8_t* u = y + width * height;
-            const uint8_t* v = u + (width / 2) * (height / 2);
+            const uint8_t* u = y + (uint32_t)width * height;
+            const uint8_t* v = u + ((uint32_t)(width / 2)) * (height / 2);
             VideoFrame::yuv420_to_rgb565(y, u, v, rgb565_out, width, height);
             got_frame = true;
             return true;

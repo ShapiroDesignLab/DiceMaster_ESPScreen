@@ -14,6 +14,11 @@ public:
     EspH264Decoder()  = default;
     ~EspH264Decoder() { destroy(); }
 
+    EspH264Decoder(const EspH264Decoder&)            = delete;
+    EspH264Decoder& operator=(const EspH264Decoder&) = delete;
+    EspH264Decoder(EspH264Decoder&&)                 = delete;
+    EspH264Decoder& operator=(EspH264Decoder&&)      = delete;
+
     // Initialise decoder. Optionally supply SPS+PPS Annex B bytes to pre-configure
     // the decoder before the first frame (avoids a one-frame stall on IDR).
     bool init(const uint8_t* sps_pps = nullptr, size_t sps_pps_len = 0);
