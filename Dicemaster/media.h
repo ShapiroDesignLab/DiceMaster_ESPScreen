@@ -109,9 +109,6 @@ private:
     static int JPEGDraw480(JPEGDRAW* pDraw);
     static int JPEGDraw240(JPEGDRAW* pDraw);
 
-    // Upscale a contiguous src_w × src_h RGB565 buffer to 2*src_w × 2*src_h using
-    // nearest-neighbour (each pixel becomes a 2×2 block). dst must be pre-allocated.
-    static void upscale_bmp565_2x(const uint16_t* src, uint16_t* dst, int src_w, int src_h);
     static void decodeTask(void* pvParameters) {
         Image* img = static_cast<Image*>(pvParameters);
         // Serial.println("[IMAGE-TASK] DEBUG: Decode task started for image ID " + String(img->get_image_id()));
@@ -126,6 +123,7 @@ private:
     void startDecode();
 
 public:
+    static void upscale_bmp565_2x(const uint16_t* src, uint16_t* dst, int src_w, int src_h);
     Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, uint8_t num_chunks, Rotation rot = Rotation::ROT_0);
     virtual ~Image();
 
@@ -172,7 +170,7 @@ public:
         case FontID::ARABIC:
             return u8g2_font_unifont_t_arabic;
         case FontID::CHINESE:
-            return u8g2_font_unifont_t_chinese;
+            return u8g2_font_unifont_t_chinese3;
         case FontID::CYRILLIC:
             return u8g2_font_cu12_t_cyrillic;
         case FontID::DEVANAGARI:

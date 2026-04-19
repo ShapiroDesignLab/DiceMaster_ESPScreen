@@ -2,8 +2,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <Arduino.h>
-#include "esp_h264/interface/include/esp_h264_dec.h"
-#include "esp_h264/sw/include/esp_h264_dec_sw.h"
+#include "esp_h264_dec.h"
+#include "esp_h264_dec_sw.h"
 
 namespace dice {
 
