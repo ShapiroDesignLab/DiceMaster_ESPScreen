@@ -172,7 +172,7 @@ public:
         case FontID::ARABIC:
             return u8g2_font_unifont_t_arabic;
         case FontID::CHINESE:
-            return u8g2_font_unifont_t_chinese3;
+            return u8g2_font_unifont_t_chinese;
         case FontID::CYRILLIC:
             return u8g2_font_cu12_t_cyrillic;
         case FontID::DEVANAGARI:
