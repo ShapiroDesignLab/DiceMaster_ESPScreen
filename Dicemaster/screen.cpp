@@ -418,7 +418,6 @@ Screen::Screen()
           PCA_TFT_RESET, PCA_TFT_CS, PCA_TFT_SCK, PCA_TFT_MOSI, &Wire, 0x3F))
     , gfx(new Arduino_Canvas(480, 480, nullptr))
     , media_queue(nullptr)
-    , screen_buffer((uint16_t*)ps_malloc(480 * 480 * sizeof(uint16_t)))
     , current_disp(nullptr)
     , queue_mutex(nullptr)
     , current_gfx_rotation(Rotation::ROT_0)
@@ -460,9 +459,11 @@ Screen::Screen()
         .pclk_gpio_num     = TFT_PCLK,
         .disp_gpio_num     = GPIO_NUM_NC,
         .data_gpio_nums    = {
-            TFT_B1, TFT_B2, TFT_B3, TFT_B4, TFT_B5,         // data[0:4]  = B[0:4]
-            TFT_G0, TFT_G1, TFT_G2, TFT_G3, TFT_G4, TFT_G5, // data[5:10] = G[0:5]
-            TFT_R1, TFT_R2, TFT_R3, TFT_R4, TFT_R5,          // data[11:15] = R[0:4]
+            // 16 pins total (RGB565): B1-B5 (5), G0-G5 (6), R1-R5 (5)
+            // No B0/R0 pins on this board — RGB565 only needs 5 bits per channel.
+            TFT_B1, TFT_B2, TFT_B3, TFT_B4, TFT_B5,         // data[0:4]  = blue
+            TFT_G0, TFT_G1, TFT_G2, TFT_G3, TFT_G4, TFT_G5, // data[5:10] = green
+            TFT_R1, TFT_R2, TFT_R3, TFT_R4, TFT_R5,          // data[11:15] = red
         },
         .flags = { .fb_in_psram = 1 },
     };
@@ -472,7 +473,10 @@ Screen::Screen()
     Serial.println("esp_lcd RGB panel initialized");
 
     // Initialise the software canvas (all existing draw calls target this).
-    gfx->begin();
+    if (!gfx->begin()) {
+        Serial.println("[SCREEN] FATAL: Canvas begin() failed");
+        while (1) delay(1000);
+    }
     gfx->fillScreen(DICE_BLACK);
     gfx->setUTF8Print(true);
 

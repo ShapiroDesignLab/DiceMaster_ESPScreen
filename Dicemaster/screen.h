@@ -28,7 +28,6 @@ private:
     QueueHandle_t media_queue;
     SemaphoreHandle_t queue_mutex;  // Protect queue operations
     
-    uint16_t* screen_buffer;
     MediaContainer* current_disp;
 
     int revolv_idx = 0;
