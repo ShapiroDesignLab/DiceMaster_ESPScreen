@@ -1,6 +1,7 @@
 #ifndef DICE_MEDIA
 #define DICE_MEDIA
 
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -42,6 +43,9 @@ public:
     // APIs for rotation support
     virtual Rotation get_rotation() const {return Rotation::ROT_0;}
     virtual void set_rotation(Rotation rot) {return;}
+
+    // APIs for VideoFrame
+    virtual uint8_t get_stream_id() const { return 0xFF; }
 
     // APIs for Text
     virtual const uint8_t* get_font() const {return 0;}
@@ -104,6 +108,7 @@ private:
     // JPEGDraw callback function to handle drawing decoded JPEG blocks
     static int JPEGDraw480(JPEGDRAW* pDraw);
     static int JPEGDraw240(JPEGDRAW* pDraw);
+
     static void decodeTask(void* pvParameters) {
         Image* img = static_cast<Image*>(pvParameters);
         // Serial.println("[IMAGE-TASK] DEBUG: Decode task started for image ID " + String(img->get_image_id()));
@@ -118,6 +123,7 @@ private:
     void startDecode();
 
 public:
+    static void upscale_bmp565_2x(const uint16_t* src, uint16_t* dst, int src_w, int src_h);
     Image(uint8_t img_id, ImageFormat format, ImageResolution res, uint32_t total_img_size, size_t duration, uint8_t num_chunks, Rotation rot = Rotation::ROT_0);
     virtual ~Image();
 
@@ -164,7 +170,7 @@ public:
         case FontID::ARABIC:
             return u8g2_font_unifont_t_arabic;
         case FontID::CHINESE:
-            return u8g2_font_unifont_t_chinese;
+            return u8g2_font_unifont_t_chinese3;
         case FontID::CYRILLIC:
             return u8g2_font_cu12_t_cyrillic;
         case FontID::DEVANAGARI:
@@ -202,6 +208,39 @@ public:
 
 MediaContainer* get_demo_textgroup();
 MediaContainer* print_error(String input);
+
+
+// VideoFrame: a single decoded H.264 frame stored as RGB565 in a PSRAM pool slot.
+// The constructor takes ownership of a pool slot via a release callback.
+// The destructor automatically returns the slot to the pool.
+class VideoFrame : public MediaContainer {
+public:
+    VideoFrame(uint8_t stream_id, uint16_t* rgb565_data, size_t display_duration_ms,
+               Rotation rotation, std::function<void(uint16_t*)> slot_release_cb);
+    ~VideoFrame() override;
+
+    // MediaContainer interface
+    uint16_t* get_img() override { return _rgb565; }
+    Rotation get_rotation() const override { return _rotation; }
+    uint8_t get_stream_id() const override { return _stream_id; }
+
+    // YUV I420 planar → RGB565 conversion (used by VideoStream decoder)
+    static void yuv420_to_rgb565(const uint8_t* y_plane, const uint8_t* u_plane,
+                                 const uint8_t* v_plane, uint16_t* dst,
+                                 int width, int height);
+
+    // Combined I420 → RGB565 with 2× nearest-neighbour upscale.
+    // src_w × src_h input → 2*src_w × 2*src_h output; dst must be pre-allocated.
+    static void yuv420_to_rgb565_2x(const uint8_t* y_plane, const uint8_t* u_plane,
+                                    const uint8_t* v_plane, uint16_t* dst,
+                                    int src_w, int src_h);
+
+private:
+    const uint8_t _stream_id;
+    uint16_t* _rgb565;
+    const Rotation _rotation;
+    std::function<void(uint16_t*)> _slot_release_cb;
+};
 
 }   // namespace dice
 

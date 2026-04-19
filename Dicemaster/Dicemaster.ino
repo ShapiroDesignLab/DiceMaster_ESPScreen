@@ -1,8 +1,9 @@
 #include "screen.h"
-#include "spi.h"
+#include "dice_spi.h"
 #include "examples.h"  // New comprehensive examples
 #include "tests.h"     // New test suite
 #include "esp_heap_caps.h"
+#include "video_stream.h"
 using namespace dice;
 
 // Global variable definitions

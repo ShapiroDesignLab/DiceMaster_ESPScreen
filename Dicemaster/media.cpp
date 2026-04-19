@@ -169,46 +169,29 @@ int Image::JPEGDraw480(JPEGDRAW* pDraw) {
 
 int Image::JPEGDraw240(JPEGDRAW* pDraw) {
     Image* img = static_cast<Image*>(pDraw->pUser);
-    
-    // Safety check - ensure the image object is still valid
-    if (img == nullptr || img->decoded_content == nullptr) {
-        return 0; // Stop decoding if object is invalid
-    }
-    
+    if (img == nullptr || img->decoded_content == nullptr) return 0;
+
     img->decode_mtx.lock();
 
-    // For now, decode without rotation to isolate the crash issue
-    // Rotation will be handled at render time instead
-
+    // Each source pixel in the 240×240 JPEG maps to a 2×2 block in the 480×480 buffer.
+    // No bounds checking needed: JPEG blocks are always within [0,240) so dest is within [0,480).
     for (int row = 0; row < pDraw->iHeight; row++) {
-        // 1) Figure out the source pointer for this row in the chunk
-        const uint16_t* src_line = 
-            reinterpret_cast<const uint16_t*>(pDraw->pPixels) + row * pDraw->iWidth;
-
+        const uint16_t* src = reinterpret_cast<const uint16_t*>(pDraw->pPixels) + row * pDraw->iWidth;
+        int dy0 = (pDraw->y + row) * 2;
+        uint16_t* row0 = img->decoded_content + dy0 * 480;
+        uint16_t* row1 = row0 + 480;
         for (int col = 0; col < pDraw->iWidth; col++) {
-            uint16_t pixel = src_line[col];
-            
-            // Calculate source coordinates (before scaling)
-            int src_x = pDraw->x + col;
-            int src_y = pDraw->y + row;
-            
-            // Scale to 480x480 (each 240 pixel becomes 2x2 block)
-            for (int dy = 0; dy < 2; dy++) {
-                for (int dx = 0; dx < 2; dx++) {
-                    int dest_x = src_x * 2 + dx;
-                    int dest_y = src_y * 2 + dy;
-                    
-                    // Bounds check and write pixel (no rotation during decode)
-                    if (dest_x >= 0 && dest_x < 480 && dest_y >= 0 && dest_y < 480) {
-                        img->decoded_content[dest_y * 480 + dest_x] = pixel;
-                    }
-                }
-            }
+            uint16_t px = src[col];
+            int dx0 = (pDraw->x + col) * 2;
+            row0[dx0]     = px;
+            row0[dx0 + 1] = px;
+            row1[dx0]     = px;
+            row1[dx0 + 1] = px;
         }
     }
 
     img->decode_mtx.unlock();
-    return 1;   // continue decode
+    return 1;
 }
 
 
@@ -568,6 +551,103 @@ MediaContainer* print_error(String input) {
     group->add_member(new Text(input, 0, FontID::TF, 40, 160));
     Serial.println("[ERROR]: " + input);
     return group;
+}
+
+
+// ============================================================
+// VideoFrame implementation
+// ============================================================
+
+VideoFrame::VideoFrame(uint8_t stream_id, uint16_t* rgb565_data,
+                       size_t display_duration_ms, Rotation rotation,
+                       std::function<void(uint16_t*)> slot_release_cb)
+    : MediaContainer(MediaType::VIDEO, display_duration_ms),
+      _stream_id(stream_id),
+      _rgb565(rgb565_data),
+      _rotation(rotation),
+      _slot_release_cb(std::move(slot_release_cb))
+{
+    set_status(MediaStatus::READY);
+}
+
+VideoFrame::~VideoFrame() {
+    if (_slot_release_cb && _rgb565) {
+        _slot_release_cb(_rgb565);
+        _rgb565 = nullptr;
+    }
+}
+
+void Image::upscale_bmp565_2x(const uint16_t* src, uint16_t* dst, int src_w, int src_h) {
+    int dst_w = src_w * 2;
+    for (int y = 0; y < src_h; y++) {
+        const uint16_t* src_row = src + y * src_w;
+        uint16_t* row0 = dst + (y * 2) * dst_w;
+        for (int x = 0; x < src_w; x++) {
+            uint16_t px = src_row[x];
+            row0[x * 2]     = px;
+            row0[x * 2 + 1] = px;
+        }
+        memcpy(dst + (y * 2 + 1) * dst_w, row0, dst_w * sizeof(uint16_t));
+    }
+}
+
+
+void VideoFrame::yuv420_to_rgb565(const uint8_t* y_plane, const uint8_t* u_plane,
+                                  const uint8_t* v_plane, uint16_t* dst,
+                                  int width, int height) {
+    // Convert I420 YUV planar to RGB565 packed.
+    // U and V planes are half-resolution (width/2 x height/2).
+    for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+            // Subtract 16 for H.264 limited-range (studio-swing) luma: Y in [16, 235]
+            int y = y_plane[row * width + col] - 16;
+            int u = u_plane[(row / 2) * (width / 2) + (col / 2)] - 128;
+            int v = v_plane[(row / 2) * (width / 2) + (col / 2)] - 128;
+
+            // BT.601 limited-range coefficients
+            int r = y + (v * 1436 >> 10);
+            int g = y - (u * 352 >> 10) - (v * 731 >> 10);
+            int b = y + (u * 1814 >> 10);
+
+            // Clamp
+            r = r < 0 ? 0 : (r > 255 ? 255 : r);
+            g = g < 0 ? 0 : (g > 255 ? 255 : g);
+            b = b < 0 ? 0 : (b > 255 ? 255 : b);
+
+            // Pack to RGB565
+            dst[row * width + col] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+        }
+    }
+}
+
+void VideoFrame::yuv420_to_rgb565_2x(const uint8_t* y_plane, const uint8_t* u_plane,
+                                      const uint8_t* v_plane, uint16_t* dst,
+                                      int src_w, int src_h) {
+    int dst_w = src_w * 2;
+    for (int row = 0; row < src_h; row++) {
+        uint16_t* row0 = dst + (row * 2) * dst_w;
+        uint16_t* row1 = row0 + dst_w;
+        for (int col = 0; col < src_w; col++) {
+            int y = y_plane[row * src_w + col] - 16;
+            int u = u_plane[(row / 2) * (src_w / 2) + (col / 2)] - 128;
+            int v = v_plane[(row / 2) * (src_w / 2) + (col / 2)] - 128;
+
+            int r = y + (v * 1436 >> 10);
+            int g = y - (u * 352 >> 10) - (v * 731 >> 10);
+            int b = y + (u * 1814 >> 10);
+
+            r = r < 0 ? 0 : (r > 255 ? 255 : r);
+            g = g < 0 ? 0 : (g > 255 ? 255 : g);
+            b = b < 0 ? 0 : (b > 255 ? 255 : b);
+
+            uint16_t px = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+            int dx0 = col * 2;
+            row0[dx0]     = px;
+            row0[dx0 + 1] = px;
+            row1[dx0]     = px;
+            row1[dx0 + 1] = px;
+        }
+    }
 }
 
 }   // namespace dice

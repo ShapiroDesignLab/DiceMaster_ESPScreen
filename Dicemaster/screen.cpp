@@ -49,6 +49,9 @@ bool Screen::is_next_ready() {
             Serial.println("[SCREEN] INFO: Deleting expired TextGroup - Status: " + String((int)front_media->get_status()));
         } else if (front_media->get_media_type() == MediaType::TEXT) {
             Serial.println("[SCREEN] INFO: Deleting expired Text - Status: " + String((int)front_media->get_status()));
+        } else if (front_media->get_media_type() == MediaType::VIDEO) {
+            Serial.println("[SCREEN] INFO: Deleting expired VideoFrame stream=" + String(front_media->get_stream_id()) +
+                           " - Status: " + String((int)front_media->get_status()));
         }
         delete front_media;
         front_media = nullptr;
@@ -166,6 +169,17 @@ void Screen::draw_bmp565_rotated(uint16_t* img, Rotation rotation) {
     gfx->draw16bitRGBBitmap(0, 0, rotated_buffer, width, height);
     free(rotated_buffer);
     // Serial.println("[ROTATION] Rotation complete, buffer freed");
+}
+
+void Screen::draw_bmp565_2x(const uint16_t* src, int src_w, int src_h, Rotation rotation) {
+    uint16_t* buf = static_cast<uint16_t*>(ps_malloc(src_w * 2 * src_h * 2 * sizeof(uint16_t)));
+    if (!buf) {
+        Serial.println("[SCREEN] ERROR: draw_bmp565_2x: PSRAM alloc failed");
+        return;
+    }
+    Image::upscale_bmp565_2x(src, buf, src_w, src_h);
+    draw_bmp565_rotated(buf, rotation);
+    free(buf);
 }
 
 void Screen::draw_color(uint16_t color) {
@@ -394,68 +408,110 @@ void Screen::display_next() {
             // Serial.println("[SCREEN] DEBUG: Calling draw_text()");
             draw_text(current_disp);
             break;
+        case MediaType::VIDEO: {
+            VideoFrame* frame = static_cast<VideoFrame*>(current_disp);
+            draw_bmp565_rotated(frame->get_img(), frame->get_rotation());
+            break;
+        }
         default:
             Serial.println("[SCREEN] ERROR: Unsupported Media Type Encountered: " + String(static_cast<int>(current_disp->get_media_type())));
             break;
         }
         // Serial.println("[SCREEN] DEBUG: Triggering display for media type " + String(static_cast<int>(current_disp->get_media_type())));
         current_disp->trigger_display();
+        // Flush canvas to hardware display
+        esp_lcd_panel_draw_bitmap(_panel, 0, 0, 480, 480, gfx->getFramebuffer());
     }
 }
 
 Screen::Screen()
-    : expander(new Arduino_XCA9554SWSPI(PCA_TFT_RESET, PCA_TFT_CS, PCA_TFT_SCK, PCA_TFT_MOSI, &Wire, 0x3F))
-    , rgbpanel(new Arduino_ESP32RGBPanel(
-        TFT_DE, TFT_VSYNC, TFT_HSYNC, TFT_PCLK, TFT_R1, TFT_R2, TFT_R3, TFT_R4, TFT_R5, TFT_G0, TFT_G1, TFT_G2, TFT_G3,
-        TFT_G4, TFT_G5, TFT_B1, TFT_B2, TFT_B3, TFT_B4, TFT_B5, 1 /* hsync_polarity */, 50 /* hsync_front_porch */,
-        2 /* hsync_pulse_width */, 44 /* hsync_back_porch */, 1 /* vsync_polarity */, 16 /* vsync_front_porch */,
-        2 /* vsync_pulse_width */, 18 /* vsync_back_porch */
-        ))
-    , gfx(new Arduino_RGB_Display(
-        // 4.0" 480x480 rectangle bar display
-        480 /* width */, 480 /* height */, rgbpanel, 0 /* rotation */, true /* auto_flush */, expander,
-        GFX_NOT_DEFINED /* RST */, tl040wvs03_init_operations, sizeof(tl040wvs03_init_operations)))
+    : expander(new Arduino_XCA9554SWSPI(
+          PCA_TFT_RESET, PCA_TFT_CS, PCA_TFT_SCK, PCA_TFT_MOSI, &Wire, 0x3F))
+    , gfx(new Arduino_Canvas(480, 480, nullptr))
     , media_queue(nullptr)
-    , screen_buffer((uint16_t*) ps_malloc(gfx->width() * gfx->height() * sizeof(uint16_t)))
     , current_disp(nullptr)
     , queue_mutex(nullptr)
-    , current_gfx_rotation(Rotation::ROT_0) {  // Initialize rotation cache
-#ifdef GFX_EXTRA_PRE_INIT
-    GFX_EXTRA_PRE_INIT();
-#endif
-#ifdef GFX_BL
-    pinMode(GFX_BL, OUTPUT);
-    digitalWrite(GFX_BL, HIGH);
-#endif
+    , current_gfx_rotation(Rotation::ROT_0)
+{
+    // I2C for the XCA9554 I/O expander (backlight, buttons, ST7701S SPI init)
+    Wire.begin();
+    Wire.setClock(1000000);
+    expander->begin();
 
-    if (!gfx->begin()) Serial.println("gfx->begin() failed!");
-    Serial.println("GFX Initialized!");
+    // Send the ST7701S initialisation sequence through the XCA9554 SPI expander.
+    // batchOperation() interprets the same op-code bytecode that Arduino_RGB_Display used.
+    expander->batchOperation(tl040wvs03_init_operations, sizeof(tl040wvs03_init_operations));
+    Serial.println("ST7701S init sequence sent");
 
-    Wire.setClock(1000000);   // speed up I2C
+    // Configure the IDF 5.x RGB panel driver.
+    // data_gpio_nums ordering: B[0:4], G[0:5], R[0:4] — mirrors Arduino_ESP32RGBPanel default.
+    const esp_lcd_rgb_panel_config_t panel_cfg = {
+        .clk_src = LCD_CLK_SRC_DEFAULT,
+        .timings = {
+            .pclk_hz           = 16 * 1000 * 1000,
+            .h_res             = 480,
+            .v_res             = 480,
+            .hsync_pulse_width = 2,
+            .hsync_back_porch  = 44,
+            .hsync_front_porch = 50,
+            .vsync_pulse_width = 2,
+            .vsync_back_porch  = 18,
+            .vsync_front_porch = 16,
+            .flags = {
+                .hsync_idle_low = 1,
+                .vsync_idle_low = 1,
+            },
+        },
+        .data_width        = 16,
+        .psram_trans_align = 64,
+        .hsync_gpio_num    = TFT_HSYNC,
+        .vsync_gpio_num    = TFT_VSYNC,
+        .de_gpio_num       = TFT_DE,
+        .pclk_gpio_num     = TFT_PCLK,
+        .disp_gpio_num     = GPIO_NUM_NC,
+        .data_gpio_nums    = {
+            // 16 pins total (RGB565): B1-B5 (5), G0-G5 (6), R1-R5 (5)
+            // No B0/R0 pins on this board — RGB565 only needs 5 bits per channel.
+            TFT_B1, TFT_B2, TFT_B3, TFT_B4, TFT_B5,         // data[0:4]  = blue
+            TFT_G0, TFT_G1, TFT_G2, TFT_G3, TFT_G4, TFT_G5, // data[5:10] = green
+            TFT_R1, TFT_R2, TFT_R3, TFT_R4, TFT_R5,          // data[11:15] = red
+        },
+        .flags = { .fb_in_psram = 1 },
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_rgb_panel(&panel_cfg, &_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(_panel));
+    Serial.println("esp_lcd RGB panel initialized");
 
+    // Initialise the software canvas (all existing draw calls target this).
+    if (!gfx->begin()) {
+        Serial.println("[SCREEN] FATAL: Canvas begin() failed");
+        while (1) delay(1000);
+    }
     gfx->fillScreen(DICE_BLACK);
     gfx->setUTF8Print(true);
 
+    // Backlight on via XCA9554 expander
     expander->pinMode(PCA_TFT_BACKLIGHT, OUTPUT);
     expander->digitalWrite(PCA_TFT_BACKLIGHT, HIGH);
 
-    // Initialize thread-safe queues
+    // Push initial black frame to the hardware
+    esp_lcd_panel_draw_bitmap(_panel, 0, 0, 480, 480, gfx->getFramebuffer());
+
+    // Thread-safe media queue
     media_queue = xQueueCreate(SCREEN_MEDIA_QUEUE_SIZE, sizeof(MediaContainer*));
     if (!media_queue) {
-        Serial.println("[SCREEN] FATAL: Failed to create media queue in constructor");
-        while(1) delay(1000); // Halt on critical failure
+        Serial.println("[SCREEN] FATAL: Failed to create media queue");
+        while (1) delay(1000);
     }
-    
     queue_mutex = xSemaphoreCreateMutex();
     if (!queue_mutex) {
-        Serial.println("[SCREEN] FATAL: Failed to create queue mutex in constructor");
+        Serial.println("[SCREEN] FATAL: Failed to create queue mutex");
         vQueueDelete(media_queue);
         media_queue = nullptr;
-        while(1) delay(1000); // Halt on critical failure
+        while (1) delay(1000);
     }
-    
-    Serial.println("[SCREEN] Thread-safe queue initialized in constructor");
-
+    Serial.println("[SCREEN] Queue initialized");
     Serial.println("Screen Initialized!");
 }
 
@@ -478,9 +534,10 @@ bool Screen::enqueue(MediaContainer* med) {
     // Serial.printf("[SCREEN] DEBUG: Attempting to enqueue media type: %d with image ID: %d\n", 
     //               (int)med->get_media_type(), med->get_image_id());
 
-    if (med->get_media_type() != MediaType::IMAGE && 
-        med->get_media_type() != MediaType::TEXTGROUP && 
-        med->get_media_type() != MediaType::TEXT) {
+    if (med->get_media_type() != MediaType::IMAGE &&
+        med->get_media_type() != MediaType::TEXTGROUP &&
+        med->get_media_type() != MediaType::TEXT &&
+        med->get_media_type() != MediaType::VIDEO) {
         Serial.println("[SCREEN] ERROR: Invalid media type: " + String(static_cast<int>(med->get_media_type())));
         return false;
     }
@@ -489,7 +546,6 @@ bool Screen::enqueue(MediaContainer* med) {
         if (xQueueSend(media_queue, &med, 0) != pdTRUE) {
             Serial.println("[SCREEN] WARNING: Media queue full, dropping media item");
             xSemaphoreGive(queue_mutex);
-            delete med;  // Clean up if we can't queue it
             return false;
         }
 
@@ -511,7 +567,6 @@ bool Screen::enqueue(MediaContainer* med) {
         return true;
     } else {
         Serial.println("[SCREEN] ERROR: Failed to acquire queue mutex");
-        delete med;
         return false;
     }
 }
@@ -586,6 +641,44 @@ void Screen::draw_startup_logo(Rotation rot) {
       MediaContainer* err = print_error("Startup Logo Decoding Failed");
       enqueue(err);
     }
+}
+
+void Screen::flush_video_stream(uint8_t stream_id) {
+    if (!media_queue || !queue_mutex) return;
+
+    std::vector<MediaContainer*> keep;
+    MediaContainer* item = nullptr;
+
+    if (xSemaphoreTake(queue_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        Serial.println("[SCREEN] ERROR: flush_video_stream() - failed to acquire mutex");
+        return;
+    }
+
+    // Also clear current_disp if it is a VideoFrame from this stream.
+    // current_disp holds the frame being rendered; it must be released before
+    // VideoStream frees its pool, otherwise the release_cb fires on freed memory.
+    if (current_disp &&
+        current_disp->get_media_type() == MediaType::VIDEO &&
+        current_disp->get_stream_id() == stream_id) {
+        delete current_disp;
+        current_disp = nullptr;
+    }
+
+    while (xQueueReceive(media_queue, &item, 0) == pdTRUE) {
+        if (item->get_media_type() == MediaType::VIDEO &&
+            item->get_stream_id() == stream_id) {
+            delete item;
+        } else {
+            keep.push_back(item);
+        }
+    }
+    for (auto* k : keep) {
+        if (xQueueSend(media_queue, &k, 0) != pdTRUE) {
+            delete k;  // queue full — release pool slot and prevent leak
+        }
+    }
+
+    xSemaphoreGive(queue_mutex);
 }
 
 // }

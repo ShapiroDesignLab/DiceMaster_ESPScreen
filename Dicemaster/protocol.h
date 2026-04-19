@@ -90,6 +90,59 @@ struct Ack   { ErrorCode status; };
 struct Error { ErrorCode code; uint8_t len; char text[255]; };
 
 // -----------------------------------------------------------------------
+//  VIDEO STREAM PAYLOAD STRUCTS  (Messages 0x10 – 0x15)
+// -----------------------------------------------------------------------
+
+// MESSAGE 0x10 — VIDEO_STREAM_INIT
+struct VideoStreamInitPayload {
+    uint8_t  stream_id;
+    uint8_t  codec;        // 0 = H.264 Baseline
+    uint16_t width;
+    uint16_t height;
+    uint8_t  fps;
+    uint8_t  rotation;     // Rotation enum value
+    uint8_t  gop_size;
+    uint16_t config_len;   // byte length of codec config (SPS/PPS) that follows
+    const uint8_t* config_data; // pointer into original buffer (not wire bytes)
+};
+
+// MESSAGE 0x11 — VIDEO_FRAME_START
+struct VideoFrameStartPayload {
+    uint8_t  stream_id;
+    uint8_t  frame_type;   // 0 = I-frame, 1 = P-frame, 2 = B-frame
+    uint32_t pts;          // presentation timestamp (ms)
+    uint32_t total_size;   // total compressed frame size in bytes
+    uint8_t  num_chunks;   // total number of chunks for this frame
+};
+
+// MESSAGE 0x12 — VIDEO_FRAME_CHUNK
+struct VideoFrameChunkPayload {
+    uint8_t  stream_id;
+    uint8_t  chunk_index;
+    uint16_t chunk_size;
+    const uint8_t* chunk_data; // pointer into original buffer
+};
+
+// MESSAGE 0x13 — VIDEO_STREAM_END
+struct VideoStreamEndPayload {
+    uint8_t stream_id;
+    uint8_t reason;  // 0 = normal end
+};
+
+// MESSAGE 0x14 — VIDEO_FLUSH
+struct VideoFlushPayload {
+    uint8_t stream_id;
+    uint8_t reason;  // 0 = clean flush, 1 = error recovery
+};
+
+// MESSAGE 0x15 — SET_ROTATION
+struct SetRotationPayload {
+    uint8_t target;     // 0 = screen global, 1 = specific stream
+    uint8_t stream_id;  // relevant when target == 1
+    uint8_t rotation;   // Rotation enum value
+};
+
+// -----------------------------------------------------------------------
 //  Tagged-union wrapper
 // -----------------------------------------------------------------------
 enum PayloadTag : uint8_t {
@@ -103,7 +156,13 @@ enum PayloadTag : uint8_t {
     TAG_PING_REQUEST,
     TAG_PING_RESPONSE,
     TAG_ACK,
-    TAG_ERROR
+    TAG_ERROR,
+    TAG_VIDEO_STREAM_INIT,
+    TAG_VIDEO_FRAME_START,
+    TAG_VIDEO_FRAME_CHUNK,
+    TAG_VIDEO_STREAM_END,
+    TAG_VIDEO_FLUSH,
+    TAG_SET_ROTATION
 };
 
 struct Payload {
@@ -117,6 +176,12 @@ struct Payload {
         PingResponse           pingResponse;
         Ack                    ack;
         Error                  error;
+        VideoStreamInitPayload videoStreamInit;
+        VideoFrameStartPayload videoFrameStart;
+        VideoFrameChunkPayload videoFrameChunk;
+        VideoStreamEndPayload  videoStreamEnd;
+        VideoFlushPayload      videoFlush;
+        SetRotationPayload     setRotation;
     } u;
 };
 
@@ -167,7 +232,7 @@ inline ErrorCode decodeHeader(const uint8_t* buf, size_t sz, MessageHeader& h)
     
     // Validate message type
     uint8_t msg_type = buf[1];
-    if(msg_type < 0x01 || msg_type > 0x0F) return ErrorCode::INVALID_MESSAGE_TYPE;
+    if(msg_type < 0x01 || msg_type > 0x15) return ErrorCode::INVALID_MESSAGE_TYPE;
     
     h.marker = buf[0];
     h.type   = static_cast<MessageType>(msg_type);
@@ -527,6 +592,71 @@ inline ErrorCode decodeError(const uint8_t* p, size_t len, Error& err)
 }
 
 // -----------------------------------------------------------------------
+//  VIDEO STREAM DECODE HELPERS
+// -----------------------------------------------------------------------
+
+// VIDEO_STREAM_INIT: stream_id(1) codec(1) width(2) height(2) fps(1) rotation(1) gop_size(1) config_len(2) [config_data]
+inline ErrorCode decodeVideoStreamInit(const uint8_t* p, size_t len, VideoStreamInitPayload& v) {
+    if (len < 11) return ErrorCode::UNSUPPORTED_MESSAGE;
+    v.stream_id  = p[0];
+    v.codec      = p[1];
+    v.width      = static_cast<uint16_t>(readBE(p + 2, 2));
+    v.height     = static_cast<uint16_t>(readBE(p + 4, 2));
+    v.fps        = p[6];
+    v.rotation   = p[7];
+    v.gop_size   = p[8];
+    v.config_len = static_cast<uint16_t>(readBE(p + 9, 2));
+    v.config_data = (v.config_len > 0 && len >= 11u + v.config_len) ? p + 11 : nullptr;
+    return ErrorCode::SUCCESS;
+}
+
+// VIDEO_FRAME_START: stream_id(1) frame_type(1) pts(4) total_size(4) num_chunks(1)
+inline ErrorCode decodeVideoFrameStart(const uint8_t* p, size_t len, VideoFrameStartPayload& v) {
+    if (len < 11) return ErrorCode::UNSUPPORTED_MESSAGE;
+    v.stream_id   = p[0];
+    v.frame_type  = p[1];
+    v.pts         = readBE(p + 2, 4);
+    v.total_size  = readBE(p + 6, 4);
+    v.num_chunks  = p[10];
+    return ErrorCode::SUCCESS;
+}
+
+// VIDEO_FRAME_CHUNK: stream_id(1) chunk_index(1) chunk_size(2) [data]
+inline ErrorCode decodeVideoFrameChunk(const uint8_t* p, size_t len, VideoFrameChunkPayload& v) {
+    if (len < 4) return ErrorCode::UNSUPPORTED_MESSAGE;
+    v.stream_id   = p[0];
+    v.chunk_index = p[1];
+    v.chunk_size  = static_cast<uint16_t>(readBE(p + 2, 2));
+    v.chunk_data  = (v.chunk_size > 0 && len >= 4u + v.chunk_size) ? p + 4 : nullptr;
+    return ErrorCode::SUCCESS;
+}
+
+// VIDEO_STREAM_END: stream_id(1) reason(1)
+inline ErrorCode decodeVideoStreamEnd(const uint8_t* p, size_t len, VideoStreamEndPayload& v) {
+    if (len < 2) return ErrorCode::UNSUPPORTED_MESSAGE;
+    v.stream_id = p[0];
+    v.reason    = p[1];
+    return ErrorCode::SUCCESS;
+}
+
+// VIDEO_FLUSH: stream_id(1) reason(1)
+inline ErrorCode decodeVideoFlush(const uint8_t* p, size_t len, VideoFlushPayload& v) {
+    if (len < 2) return ErrorCode::UNSUPPORTED_MESSAGE;
+    v.stream_id = p[0];
+    v.reason    = p[1];
+    return ErrorCode::SUCCESS;
+}
+
+// SET_ROTATION: target(1) stream_id(1) rotation(1)
+inline ErrorCode decodeSetRotation(const uint8_t* p, size_t len, SetRotationPayload& v) {
+    if (len < 3) return ErrorCode::UNSUPPORTED_MESSAGE;
+    v.target    = p[0];
+    v.stream_id = p[1];
+    v.rotation  = p[2];
+    return ErrorCode::SUCCESS;
+}
+
+// -----------------------------------------------------------------------
 //  MAIN DECODE FUNCTION
 // -----------------------------------------------------------------------
 inline ErrorCode decode(const uint8_t* buffer, size_t bufferSize, Message& msg)
@@ -582,7 +712,31 @@ inline ErrorCode decode(const uint8_t* buffer, size_t bufferSize, Message& msg)
         case MessageType::ERROR:
             msg.payload.tag = TAG_ERROR;
             return decodeError(payload, payloadLen, msg.payload.u.error);
-            
+
+        case MessageType::VIDEO_STREAM_INIT:
+            msg.payload.tag = TAG_VIDEO_STREAM_INIT;
+            return decodeVideoStreamInit(payload, payloadLen, msg.payload.u.videoStreamInit);
+
+        case MessageType::VIDEO_FRAME_START:
+            msg.payload.tag = TAG_VIDEO_FRAME_START;
+            return decodeVideoFrameStart(payload, payloadLen, msg.payload.u.videoFrameStart);
+
+        case MessageType::VIDEO_FRAME_CHUNK:
+            msg.payload.tag = TAG_VIDEO_FRAME_CHUNK;
+            return decodeVideoFrameChunk(payload, payloadLen, msg.payload.u.videoFrameChunk);
+
+        case MessageType::VIDEO_STREAM_END:
+            msg.payload.tag = TAG_VIDEO_STREAM_END;
+            return decodeVideoStreamEnd(payload, payloadLen, msg.payload.u.videoStreamEnd);
+
+        case MessageType::VIDEO_FLUSH:
+            msg.payload.tag = TAG_VIDEO_FLUSH;
+            return decodeVideoFlush(payload, payloadLen, msg.payload.u.videoFlush);
+
+        case MessageType::SET_ROTATION:
+            msg.payload.tag = TAG_SET_ROTATION;
+            return decodeSetRotation(payload, payloadLen, msg.payload.u.setRotation);
+
         default:
             return ErrorCode::UNSUPPORTED_MESSAGE;
     }

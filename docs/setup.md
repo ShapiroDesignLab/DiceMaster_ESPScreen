@@ -2,10 +2,10 @@
 
 ## Dependencies
 
-- esp32 (2.0.17)
-- ESP32DMASPI (0.6.5)
-- GFX Library for Arduino (1.4.9)
-- JPEGDEC (1.8.2)
+- esp32 (3.2.0)
+- ESP32DMASPI (0.8.0)
+- GFX Library for Arduino (1.6.5)
+- JPEGDEC (1.8.4)
 - U8g2 (2.35.30)
 
 ## Factory Reset

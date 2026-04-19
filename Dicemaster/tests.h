@@ -3,10 +3,13 @@
 
 #include "examples.h"
 #include "screen.h"
-#include "spi.h"
+#include "dice_spi.h"
 #include "media.h"
 #include "protocol.h"
 #include "jpg.hs/logo.h"
+#include "esp_h264_decoder.h"
+#include "test_video.h"
+#include "esp_heap_caps.h"
 
 namespace dice {
 
@@ -1088,6 +1091,84 @@ public:
     }
     
     /**
+     * Smoke test: decode the first frame of the embedded 240×240 H.264 test video,
+     * upscale 2× to 480×480, and display it for 2 seconds via the normal Screen queue.
+     */
+    void test_video_playback() {
+        Serial.println("=== Testing H.264 Video Playback ===");
+
+        uint16_t* frame240 = static_cast<uint16_t*>(
+            heap_caps_malloc(TEST_VIDEO_WIDTH * TEST_VIDEO_HEIGHT * sizeof(uint16_t),
+                             MALLOC_CAP_SPIRAM));
+        uint16_t* frame480 = static_cast<uint16_t*>(
+            heap_caps_malloc(480 * 480 * sizeof(uint16_t), MALLOC_CAP_SPIRAM));
+
+        if (!frame240 || !frame480) {
+            Serial.println("[VIDEO-TEST] FAIL: PSRAM alloc failed");
+            heap_caps_free(frame240);
+            heap_caps_free(frame480);
+            return;
+        }
+
+        // Copy compressed stream to PSRAM — tinyh264 needs a non-flash buffer.
+        uint8_t* video_psram = static_cast<uint8_t*>(
+            heap_caps_malloc(TEST_VIDEO_SIZE, MALLOC_CAP_SPIRAM));
+        if (!video_psram) {
+            Serial.println("[VIDEO-TEST] FAIL: PSRAM alloc for video copy failed");
+            heap_caps_free(frame240);
+            heap_caps_free(frame480);
+            return;
+        }
+        memcpy(video_psram, TEST_VIDEO_DATA, TEST_VIDEO_SIZE);
+
+        EspH264Decoder decoder;
+        if (!decoder.init()) {
+            Serial.println("[VIDEO-TEST] FAIL: decoder init failed");
+            heap_caps_free(video_psram);
+            heap_caps_free(frame240);
+            heap_caps_free(frame480);
+            return;
+        }
+
+        bool got_frame = decoder.decode_frame(
+            video_psram, TEST_VIDEO_SIZE,
+            frame240, TEST_VIDEO_WIDTH, TEST_VIDEO_HEIGHT);
+        heap_caps_free(video_psram);
+
+        if (!got_frame) {
+            Serial.println("[VIDEO-TEST] FAIL: decode_frame returned false");
+            heap_caps_free(frame240);
+            heap_caps_free(frame480);
+            return;
+        }
+
+        Image::upscale_bmp565_2x(frame240, frame480, TEST_VIDEO_WIDTH, TEST_VIDEO_HEIGHT);
+        heap_caps_free(frame240);
+        Serial.printf("[VIDEO-TEST] Frame decoded and upscaled (%dx%d → 480x480)\n",
+                      TEST_VIDEO_WIDTH, TEST_VIDEO_HEIGHT);
+
+        // Enqueue as VideoFrame — release_cb returns frame480 to heap when display is done
+        auto* vf = new VideoFrame(
+            0xFF, frame480, 2000, Rotation::ROT_0,
+            [](uint16_t* p) { heap_caps_free(p); });
+        if (!screen->enqueue(vf)) {
+            delete vf;  // destructor calls release_cb, which frees frame480
+            Serial.println("[VIDEO-TEST] FAIL: enqueue failed");
+            return;
+        }
+
+        // Drive display loop for 3 s to show the frame
+        unsigned long t0 = millis();
+        while (millis() - t0 < 3000) {
+            screen->update();
+            delay(16);
+        }
+
+        Serial.println("[VIDEO-TEST] PASS");
+        Serial.println("=== H.264 Video Playback Test Complete ===");
+    }
+
+    /**
      * Run all tests in sequence
      */
     void run_all_tests() {
@@ -1107,12 +1188,15 @@ public:
         // test_rotation();
         // delay(1000);
         
+        test_video_playback();
+        delay(1000);
+
         test_protocol();
         delay(1000);
-        
+
         test_spi_protocol();
         delay(1000);
-        
+
         test_error_handling();
         delay(1000);
         

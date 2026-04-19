@@ -8,6 +8,8 @@
 #include <freertos/semphr.h>
 
 #include <Arduino_GFX_Library.h>
+#include <esp_lcd_panel_rgb.h>
+#include <esp_lcd_panel_ops.h>
 #include <U8g2lib.h>
 #include "media.h"
 
@@ -19,14 +21,13 @@ constexpr size_t SCREEN_MEDIA_QUEUE_SIZE = 32;  // Buffer up to 32 media items
 class Screen {
 private:
     Arduino_XCA9554SWSPI* expander;
-    Arduino_ESP32RGBPanel* rgbpanel;
-    Arduino_RGB_Display* gfx;
+    esp_lcd_panel_handle_t _panel = nullptr;
+    Arduino_Canvas* gfx;
 
     // Single thread-safe queue for all media
     QueueHandle_t media_queue;
     SemaphoreHandle_t queue_mutex;  // Protect queue operations
     
-    uint16_t* screen_buffer;
     MediaContainer* current_disp;
 
     int revolv_idx = 0;
@@ -40,6 +41,8 @@ private:
     void draw_img(MediaContainer* med);
     void draw_bmp565(uint16_t* img);
     void draw_bmp565_rotated(uint16_t* img, Rotation rotation);
+    // Upscale src (src_w × src_h RGB565) 2× and display at 480×480 with rotation.
+    void draw_bmp565_2x(const uint16_t* src, int src_w, int src_h, Rotation rotation);
     void draw_color(uint16_t color);
     void draw_textgroup(MediaContainer* tg);
     void draw_text(MediaContainer* txt);
@@ -69,6 +72,7 @@ public:
     bool down_button_pressed();
     bool up_button_pressed();
     int num_queued();
+    void flush_video_stream(uint8_t stream_id);
 
     // Demo functions
     void draw_startup_logo(Rotation rot);

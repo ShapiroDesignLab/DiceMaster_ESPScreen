@@ -60,4 +60,6 @@ CLAUDE.md
 .claude/
 
 # Git worktrees
-.worktrees/
+.worktrees/# Allow prebuilt tinyh264 for ESP32-S3 (required by espressif/esp_h264)
+!Dicemaster/libraries/tinyh264/src/esp32/libtinyh264.a
+Dicemaster/esp_h264/test_apps/
