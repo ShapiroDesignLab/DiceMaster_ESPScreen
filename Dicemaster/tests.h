@@ -3,7 +3,7 @@
 
 #include "examples.h"
 #include "screen.h"
-#include "spi.h"
+#include "dice_spi.h"
 #include "media.h"
 #include "protocol.h"
 #include "jpg.hs/logo.h"
