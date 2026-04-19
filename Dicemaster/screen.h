@@ -41,6 +41,8 @@ private:
     void draw_img(MediaContainer* med);
     void draw_bmp565(uint16_t* img);
     void draw_bmp565_rotated(uint16_t* img, Rotation rotation);
+    // Upscale src (src_w × src_h RGB565) 2× and display at 480×480 with rotation.
+    void draw_bmp565_2x(const uint16_t* src, int src_w, int src_h, Rotation rotation);
     void draw_color(uint16_t color);
     void draw_textgroup(MediaContainer* tg);
     void draw_text(MediaContainer* txt);

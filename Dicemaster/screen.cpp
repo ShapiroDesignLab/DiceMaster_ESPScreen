@@ -171,6 +171,17 @@ void Screen::draw_bmp565_rotated(uint16_t* img, Rotation rotation) {
     // Serial.println("[ROTATION] Rotation complete, buffer freed");
 }
 
+void Screen::draw_bmp565_2x(const uint16_t* src, int src_w, int src_h, Rotation rotation) {
+    uint16_t* buf = static_cast<uint16_t*>(ps_malloc(src_w * 2 * src_h * 2 * sizeof(uint16_t)));
+    if (!buf) {
+        Serial.println("[SCREEN] ERROR: draw_bmp565_2x: PSRAM alloc failed");
+        return;
+    }
+    Image::upscale_bmp565_2x(src, buf, src_w, src_h);
+    draw_bmp565_rotated(buf, rotation);
+    free(buf);
+}
+
 void Screen::draw_color(uint16_t color) {
     gfx->fillScreen(color);
 }
