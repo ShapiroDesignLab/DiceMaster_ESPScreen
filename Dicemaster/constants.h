@@ -1,3 +1,11 @@
+/*
+ * constants.h — Protocol enums shared between the SPI layer and the decoder.
+ *
+ * MessageType identifies the SPI packet category (text batch, image chunk,
+ * GIF frame, etc.). MediaType identifies the in-memory container type.
+ * See docs/protocol.md in the DiceMaster root repository for the full
+ * wire-format specification.
+ */
 #ifndef DICE_CONSTANTS_H
 #define DICE_CONSTANTS_H
 

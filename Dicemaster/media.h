@@ -1,3 +1,14 @@
+/*
+ * media.h — MediaContainer type hierarchy
+ *
+ * MediaContainer is the base class for all displayable content. Concrete
+ * subtypes are ImageContainer (JPEG/BMP), TextContainer (U8g2-rendered text),
+ * and GifContainer (multi-frame animation). The Screen class owns instances
+ * and dequeues them for rendering on the BusEventLoop thread.
+ *
+ * Most virtual stubs on the base class return 0/nullptr by design — subclasses
+ * override only the methods relevant to their media type.
+ */
 #ifndef DICE_MEDIA
 #define DICE_MEDIA
 
