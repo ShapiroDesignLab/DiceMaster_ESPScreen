@@ -59,6 +59,19 @@ Drag `resource/Qualia_S3_RGB666_FactoryReset.uf2` onto the board's USB drive.
 ### Development workflow
 See `docs/runbooks/local-dev.md` for compile/flash cycle, serial log format, and end-to-end testing with the Pi.
 
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | How the firmware works: system modes, SPI pipeline, wire protocol, media types, config |
+| [docs/setup.md](docs/setup.md) | Toolchain, exact library versions, board settings |
+| [docs/runbooks/flashing.md](docs/runbooks/flashing.md) | Build & flash a board, factory reset, troubleshooting |
+| [docs/runbooks/local-dev.md](docs/runbooks/local-dev.md) | Compile/flash/debug loop, serial logs, `SPI_DEBUG`, end-to-end test |
+| root repo `docs/protocol.md` | The SPI wire protocol, shared with `DiceMaster_Central` |
+
+The README and `docs/` are the single source of truth. `CLAUDE.md` / `AGENTS.md`
+are thin pointers here — coding agents should read the docs, not a separate copy.
+
 ## Repository layout
 
 ```
