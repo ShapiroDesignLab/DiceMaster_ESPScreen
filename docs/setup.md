@@ -1,19 +1,42 @@
-# ESP32 Screen Module Setup
+# ESPScreen Setup
 
-## Dependencies
+## Toolchain
 
-- esp32 (2.0.17)
-- ESP32DMASPI (0.6.5)
-- GFX Library for Arduino (1.4.9)
-- JPEGDEC (1.8.2)
-- U8g2 (2.35.30)
+- Arduino IDE 2.x (or PlatformIO)
+- ESP32 Arduino Core **3.2.0** (Boards Manager → "esp32")
 
-## Factory Reset
+## Library dependencies (exact versions)
 
-It is inevitable that you will upload a program that causes segmentation faults. In this case, the board hard-crashes and cannot receive further uploads through USB. To factory-reset, drag the default UF2 file from `resource/` onto the board.
+| Library | Version |
+|---|---|
+| ESP32DMASPI | 0.8.0 |
+| GFX Library for Arduino | 1.6.5 |
+| JPEGDEC | 1.8.4 |
+| U8g2 | 2.35.30 |
+
+> Versions matter — the SPI-slave and display APIs changed across releases.
+> These are the versions the current firmware is built and tested against, and
+> they match `../README.md` and `docs/runbooks/flashing.md`. Do not mix versions.
+
+## Board settings
+
+- **Board:** "Adafruit Feather ESP32-S3 No PSRAM" (or "ESP32S3 Dev Module")
+- **PSRAM:** `OPI PSRAM` (required)
+- **Partition Scheme:** `Huge APP (3MB No OTA/1MB SPIFFS)` (required)
+
+## Flashing & factory reset
+
+Full step-by-step flashing instructions, including recovery from a crashed board
+(drag `resource/Qualia_S3_RGB666_FactoryReset.uf2` onto the board's USB drive),
+are in **[docs/runbooks/flashing.md](runbooks/flashing.md)**.
 
 ## Hardware
 
-- [Adafruit LCD 4" square display](https://www.adafruit.com/product/5827)
-- [ESP32-S3 controller](https://www.adafruit.com/product/5800)
+- [Adafruit Qualia ESP32-S3 for RGB-666 Displays](https://www.adafruit.com/product/5800)
+- 480×480 IPS LCD panel (RGB-666)
 - [Board guide](https://learn.adafruit.com/adafruit-qualia-esp32-s3-for-rgb666-displays)
+
+## Next steps
+
+- [docs/architecture.md](architecture.md) — how the firmware works
+- [docs/runbooks/local-dev.md](runbooks/local-dev.md) — compile/flash/debug loop

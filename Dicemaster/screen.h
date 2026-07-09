@@ -1,3 +1,12 @@
+/*
+ * screen.h — Top-level display abstraction.
+ *
+ * Screen wraps one physical LCD panel. It maintains a priority queue of
+ * MediaContainers and processes them on the BusEventLoop thread. The
+ * public API (enqueue, set_backlight, draw_startup_logo) is called
+ * from the SPI decode path and is thread-safe via a FreeRTOS queue
+ * and semaphore.
+ */
 #ifndef DICE_SCREEN
 #define DICE_SCREEN
 
